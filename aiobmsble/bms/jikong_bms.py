@@ -14,6 +14,13 @@ from bleak.uuids import normalize_uuid_str
 from aiobmsble import BMSdp, BMSmode, BMSsample, BMSvalue, MatcherPattern
 from aiobmsble.basebms import BaseBMS, crc_sum
 
+def countBits(n):
+    c = 0
+    while n > 0:
+        c += 1
+        n = n & (n - 1)
+    return c
+
 
 class BMS(BaseBMS):
     """Jikong Smart BMS class implementation."""
@@ -25,6 +32,7 @@ class BMS(BaseBMS):
     TYPE_POS: Final[int] = 4  # frame type is right after the header
     INFO_LEN: Final[int] = 300
     _FIELDS: Final[tuple[BMSdp, ...]] = (  # Protocol: JK02_32S; JK02_24S has offset -32
+        #BMSdp("cell_count", 146, 1, False),
         BMSdp("voltage", 150, 4, False, lambda x: x / 1000),
         BMSdp("current", 158, 4, True, lambda x: x / 1000),
         BMSdp("battery_level", 173, 1, False, lambda x: x),
@@ -108,7 +116,9 @@ class BMS(BaseBMS):
         self._data += data
 
         self._log.debug(
-            "RX BLE data (%s): %s", "start" if data == self._data else "cnt.", data
+            "RX BLE data (%s): %s (buf len %d)", "start" if len(data) == len(self._data) else "cnt.",
+            '<omit>', #data,
+            len(self._data),
         )
 
         # verify that data is long enough
@@ -160,9 +170,9 @@ class BMS(BaseBMS):
 
         for service in self._client.services:
             for char in service.characteristics:
-                self._log.debug(
-                    "discovered %s (#%i): %s", char.uuid, char.handle, char.properties
-                )
+                #self._log.debug(
+                #    "discovered %s (#%i): %s", char.uuid, char.handle, char.properties
+                #)
                 if char.uuid == normalize_uuid_str(
                     BMS.uuid_rx()
                 ) or char.uuid == normalize_uuid_str(BMS.uuid_tx()):
@@ -244,7 +254,7 @@ class BMS(BaseBMS):
             if mask & (1 << idx)
             and (
                 value := int.from_bytes(
-                    data[pos : pos + 2], byteorder="little", signed=True
+                    data[pos : pos + 2], "little", True
                 )
             )
             != -2000
@@ -257,13 +267,13 @@ class BMS(BaseBMS):
         result: BMSsample = BMS._decode_data(
             BMS._FIELDS, data, byteorder="little", offset=offs
         )
-        result["cell_count"] = int.from_bytes(
-            data[70 + (offs >> 1) : 74 + (offs >> 1)], byteorder="little"
-        ).bit_count()
+        result["cell_count"] = countBits(int.from_bytes(
+            data[70 + (offs >> 1) : 74 + (offs >> 1)], "little"
+        ))
 
         result["delta_voltage"] = (
             int.from_bytes(
-                data[76 + (offs >> 1) : 78 + (offs >> 1)], byteorder="little"
+                data[76 + (offs >> 1) : 78 + (offs >> 1)], "little"
             )
             / 1000
         )
@@ -279,9 +289,9 @@ class BMS(BaseBMS):
 
     async def _async_update(self) -> BMSsample:
         """Update battery status information."""
-        if not self._data_event.is_set() or self._data_final[4] != 0x02:
+        if self._data_final[4] != 0x02:
             # request cell info (only if data is not constantly published)
-            self._log.debug("requesting cell info")
+            self._log.debug("requesting cell info, buf[4] = %d", self._data_final[4])
             await self._await_reply(
                 data=BMS._cmd(b"\x96"), char=self._char_write_handle
             )

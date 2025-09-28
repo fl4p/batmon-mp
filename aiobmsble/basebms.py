@@ -4,10 +4,11 @@ Project: aiobmsble, https://pypi.org/p/aiobmsble/
 License: Apache-2.0, http://www.apache.org/licenses/
 """
 
-from abc import ABC, abstractmethod
 import asyncio
-from typing import Callable, MutableMapping
 import logging
+from abc import ABC, abstractmethod
+from typing import Callable
+
 try:
     from statistics import fmean
 except ImportError:
@@ -17,10 +18,8 @@ except ImportError:
 try:
     TimeoutError()
 except NameError:
-    class TimeoutError(Exception):
-        pass
+    TimeoutError = asyncio.TimeoutError
 
-from types import TracebackType
 from typing import Any, Final, Literal, Self
 
 from bleak import BleakClient
@@ -47,24 +46,31 @@ except ImportError:
 from aiobmsble import BMSdp, BMSsample, BMSvalue, MatcherPattern
 
 
+# micropython cannot handle signed integers
+def int_from_bytes(data, byteorder, signed):
+    i = int.from_bytes(data, byteorder)
+    b = len(data) * 8
+    if signed and i > 2 ** (b - 1):
+        i -= 2 ** b
+    return i
+
+
 class BaseBMS(ABC):
     """Abstract base class for battery management system."""
 
     MAX_RETRY: Final[int] = 3  # max number of retries for data requests
     TIMEOUT: Final[float] = BLEAK_TIMEOUT / 4  # default timeout for BMS operations
     # calculate time between retries to complete all retries (2 modes) in TIMEOUT seconds
-    _RETRY_TIMEOUT: Final[float] = TIMEOUT / (2**MAX_RETRY - 1)
+    _RETRY_TIMEOUT: Final[float] = TIMEOUT / (2 ** MAX_RETRY - 1)
     _MAX_TIMEOUT_FACTOR: Final[int] = 8  # limit timout increase to 8x
     _MAX_CELL_VOLT: Final[float] = 5.906  # max cell potential
     _HRS_TO_SECS: Final[int] = 60 * 60  # seconds in an hour
 
-
-
     def __init__(
-        self,
-        ble_device: BLEDevice,
-        keep_alive: bool = True,
-        logger_name: str = "",
+            self,
+            ble_device: BLEDevice,
+            keep_alive: bool = True,
+            logger_name: str = "",
     ) -> None:
         """Intialize the BMS.
 
@@ -81,7 +87,7 @@ class BaseBMS(ABC):
 
         """
         assert (
-            getattr(self, "_notification_handler", None) is not None
+                getattr(self, "_notification_handler", None) is not None
         ), "BMS class must define _notification_handler method"
         self._ble_device: Final[BLEDevice] = ble_device
         self._keep_alive: Final[bool] = keep_alive
@@ -90,7 +96,7 @@ class BaseBMS(ABC):
         logger_name = logger_name or self.__class__.__module__
         # addr = self._ble_device.address[-5:].replace(':','')
         self._log = logging.getLogger(f"{logger_name}")
-        self._log.setLevel(logging.DEBUG)
+        # self._log.setLevel(logging.DEBUG)
 
         self._log.debug(
             "initializing %s, BT address: %s", self.device_id(), ble_device.address
@@ -111,10 +117,10 @@ class BaseBMS(ABC):
         return self
 
     async def __aexit__(
-        self,
-        typ: type | None,
-        exc: BaseException | None,
-        tb,
+            self,
+            typ: type | None,
+            exc: BaseException | None,
+            tb,
     ) -> None:
         """Asynchronous context manager exit functionality."""
         await self.disconnect()
@@ -246,8 +252,8 @@ class BaseBMS(ABC):
 
         for attr, (required, calc_func) in calculations.items():
             if (
-                can_calc(attr, frozenset(required))
-                and (value := calc_func()) is not None
+                    can_calc(attr, frozenset(required))
+                    and (value := calc_func()) is not None
             ):
                 data[attr] = value
 
@@ -271,7 +277,7 @@ class BaseBMS(ABC):
         self._log.debug("disconnected from BMS")
 
     async def _init_connection(
-        self, char_notify: BleakGATTCharacteristic | int | str | None = None
+            self, char_notify: BleakGATTCharacteristic | int | str | None = None
     ) -> None:
         # reset any stale data from BMS
         self._data = bytearray()
@@ -288,12 +294,12 @@ class BaseBMS(ABC):
             self._log.debug("BMS already connected")
             return
 
-        #try:
-        await self._client.disconnect()  # ensure no stale connection exists
-        #except (BleakError, TimeoutError):
-        #    self._log.debug(
-        #        "failed to disconnect stale connection", exc_info=True
-        #    )
+        try:
+            await self._client.disconnect()  # ensure no stale connection exists
+        except (BleakError, asyncio.TimeoutError):
+            self._log.debug(
+                "failed to disconnect stale connection", exc_info=True
+            )
 
         self._log.debug("connecting BMS")
         self._client = await establish_connection(
@@ -320,18 +326,18 @@ class BaseBMS(ABC):
         return bool(char_tx and "write" in getattr(char_tx, "properties", []))
 
     async def _send_msg(
-        self,
-        data: bytes,
-        max_size: int,
-        char: int | str,
-        attempt: int,
-        inv_wr_mode: bool = False,
+            self,
+            data: bytes,
+            max_size: int,
+            char: int | str,
+            attempt: int,
+            inv_wr_mode: bool = False,
     ) -> None:
         """Send message to the bms in chunks if needed."""
         chunk_size: Final[int] = max_size or len(data)
 
         for i in range(0, len(data), chunk_size):
-            chunk: bytes = data[i : i + chunk_size]
+            chunk: bytes = data[i: i + chunk_size]
             self._log.debug(
                 "TX BLE req #%i (%s%s%s): %s",
                 attempt + 1,
@@ -347,18 +353,18 @@ class BaseBMS(ABC):
             )
 
     async def _await_reply(
-        self,
-        data: bytes,
-        char: int | str | None = None,
-        wait_for_notify: bool = True,
-        max_size: int = 0,
+            self,
+            data: bytes,
+            char: int | str | None = None,
+            wait_for_notify: bool = True,
+            max_size: int = 0,
     ) -> None:
         """Send data to the BMS and wait for valid reply notification."""
 
         for inv_wr_mode in (
-            [False, True] if self._inv_wr_mode is None else [self._inv_wr_mode]
+                [False, True] if self._inv_wr_mode is None else [self._inv_wr_mode]
         ):
-            #try:
+            try:
                 self._data_event.clear()  # clear event before requesting new data
                 for attempt in range(BaseBMS.MAX_RETRY):
                     await self._send_msg(
@@ -370,7 +376,7 @@ class BaseBMS(ABC):
                         await asyncio.wait_for(
                             self._wait_event(),
                             BaseBMS._RETRY_TIMEOUT
-                            * min(2**attempt, BaseBMS._MAX_TIMEOUT_FACTOR),
+                            * min(2 ** attempt, BaseBMS._MAX_TIMEOUT_FACTOR),
                         )
                     except TimeoutError:
                         self._log.debug("TX BLE request timed out.")
@@ -378,83 +384,92 @@ class BaseBMS(ABC):
 
                     self._inv_wr_mode = inv_wr_mode
                     return  # leave loop if no exception
-            #except BleakError as exc:
-            #    # reconnect on communication errors
-            #    self._log.warning(
-            #        "TX BLE request error, retrying connection (%s)", type(exc).__name__
-            #    )
-            #    await self.disconnect()
-            #    await self._connect()
-            # TODO remove commend
+            except BleakError as exc:
+                # reconnect on communication errors
+                self._log.warning(
+                    "TX BLE request error, retrying connection (%s)", type(exc).__name__
+                )
+            await self.disconnect()
+            await self._connect()
+
         raise TimeoutError
 
-    async def disconnect(self, reset: bool = False) -> None:
-        """Disconnect the BMS, includes stoping notifications."""
 
-        self._log.debug("disconnecting BMS (%s)", str(self._client.is_connected))
-        try:
-            self._data_event.clear()
-            if reset:
-                self._inv_wr_mode = None  # reset write mode
-            await self._client.disconnect()
-        except (BleakError, TimeoutError) as exc:
-            self._log.error("disconnect failed! (%s)", type(exc).__name__)
+async def disconnect(self, reset: bool = False) -> None:
+    """Disconnect the BMS, includes stoping notifications."""
 
-    async def _wait_event(self) -> None:
-        """Wait for data event and clear it."""
-        await self._data_event.wait()
+    self._log.debug("disconnecting BMS (%s)", str(self._client.is_connected))
+    try:
         self._data_event.clear()
+        if reset:
+            self._inv_wr_mode = None  # reset write mode
+        await self._client.disconnect()
+    except (BleakError, TimeoutError) as exc:
+        self._log.error("disconnect failed! (%s)", type(exc).__name__)
 
-    @abstractmethod
-    async def _async_update(self) -> BMSsample:
-        """Return a dictionary of BMS values (keys need to come from the SENSOR_TYPES list)."""
 
-    async def async_update(self) -> BMSsample:
-        """Retrieve updated values from the BMS using method of the subclass.
+async def _wait_event(self) -> None:
+    """Wait for data event and clear it."""
+    await self._data_event.wait()
+    self._data_event.clear()
 
-        Args:
-            raw (bool): if true, the raw data from the BMS is returned without
-                any calculations or missing values added
 
-        Returns:
-            BMSsample: dictionary with BMS values
+@abstractmethod
+async def _async_update(self) -> BMSsample:
+    """Return a dictionary of BMS values (keys need to come from the SENSOR_TYPES list)."""
 
-        """
-        await self._connect()
 
-        data: BMSsample = await self._async_update()
-        self._add_missing_values(data, self._calc_values())
+async def async_update(self) -> BMSsample:
+    """Retrieve updated values from the BMS using method of the subclass.
 
-        if not self._keep_alive:
-            # disconnect after data update to force reconnect next time (slow!)
-            await self.disconnect()
+    Args:
+        raw (bool): if true, the raw data from the BMS is returned without
+            any calculations or missing values added
 
-        return data
+    Returns:
+        BMSsample: dictionary with BMS values
 
-    @staticmethod
-    def _decode_data(
+    """
+    await self._connect()
+
+    data: BMSsample = await self._async_update()
+    self._add_missing_values(data, self._calc_values())
+
+    if not self._keep_alive:
+        # disconnect after data update to force reconnect next time (slow!)
+        await self.disconnect()
+
+    return data
+
+
+@staticmethod
+def _decode_data(
         fields: tuple[BMSdp, ...],
         data: bytearray | dict[int, bytearray],
         *,
         byteorder: Literal["little", "big"] = "big",
         offset: int = 0,
-    ) -> BMSsample:
-        result: BMSsample = BMSsample()
-        for field in fields:
-            if isinstance(data, dict) and field.idx not in data:
-                continue
-            msg: bytearray = data[field.idx] if isinstance(data, dict) else data
-            result[field.key] = field.fct(
-                int.from_bytes(
-                    msg[offset + field.pos : offset + field.pos + field.size],
-                    byteorder=byteorder,
-                    signed=field.signed,
-                )
+) -> BMSsample:
+    result: BMSsample = BMSsample()
+    for field in fields:
+        if isinstance(data, dict) and field.idx not in data:
+            continue
+        msg: bytearray = data[field.idx] if isinstance(data, dict) else data
+        # if field.key == 'current':
+        #    print(field.key, msg[offset + field.pos: offset + field.pos + field.size], byteorder, field.signed,
+        #          offset, field.pos, field.size)
+        result[field.key] = field.fct(
+            int_from_bytes(
+                msg[offset + field.pos: offset + field.pos + field.size],
+                byteorder,
+                field.signed,
             )
-        return result
+        )
+    return result
 
-    @staticmethod
-    def _cell_voltages(
+
+@staticmethod
+def _cell_voltages(
         data: bytearray,
         *,
         cells: int,
@@ -462,36 +477,37 @@ class BaseBMS(ABC):
         size: int = 2,
         byteorder: Literal["little", "big"] = "big",
         divider: int = 1000,
-    ) -> list[float]:
-        """Return cell voltages from BMS message.
+) -> list[float]:
+    """Return cell voltages from BMS message.
 
-        Args:
-            data: Raw data from BMS
-            cells: Number of cells to read
-            start: Start position in data array
-            size: Number of bytes per cell value (defaults 2)
-            byteorder: Byte order ("big"/"little" endian)
-            divider: Value to divide raw value by, defaults to 1000 (mv to V)
+    Args:
+        data: Raw data from BMS
+        cells: Number of cells to read
+        start: Start position in data array
+        size: Number of bytes per cell value (defaults 2)
+        byteorder: Byte order ("big"/"little" endian)
+        divider: Value to divide raw value by, defaults to 1000 (mv to V)
 
-        Returns:
-            list[float]: List of cell voltages in volts
+    Returns:
+        list[float]: List of cell voltages in volts
 
-        """
-        return [
-            value / divider
-            for idx in range(cells)
-            if (len(data) >= start + (idx + 1) * size)
-            and (
-                value := int.from_bytes(
-                    data[start + idx * size : start + (idx + 1) * size],
-                    byteorder=byteorder,
-                    signed=False,
-                )
+    """
+    return [
+        value / divider
+        for idx in range(cells)
+        if (len(data) >= start + (idx + 1) * size)
+        and (
+            value := int_from_bytes(
+                data[start + idx * size: start + (idx + 1) * size],
+                byteorder,
+                False,
             )
-        ]
+        )
+    ]
 
-    @staticmethod
-    def _temp_values(
+
+@staticmethod
+def _temp_values(
         data: bytearray,
         *,
         values: int,
@@ -501,38 +517,38 @@ class BaseBMS(ABC):
         signed: bool = True,
         offset: float = 0,
         divider: int = 1,
-    ) -> list[int | float]:
-        """Return temperature values from BMS message.
+) -> list[int | float]:
+    """Return temperature values from BMS message.
 
-        Args:
-            data: Raw data from BMS
-            values: Number of values to read
-            start: Start position in data array
-            size: Number of bytes per cell value (defaults 2)
-            byteorder: Byte order ("big"/"little" endian)
-            signed: Indicates whether two's complement is used to represent the integer.
-            offset: The offset read values are shifted by (for Kelvin use 273.15)
-            divider: Value to divide raw value by, defaults to 1000 (mv to V)
+    Args:
+        data: Raw data from BMS
+        values: Number of values to read
+        start: Start position in data array
+        size: Number of bytes per cell value (defaults 2)
+        byteorder: Byte order ("big"/"little" endian)
+        signed: Indicates whether two's complement is used to represent the integer.
+        offset: The offset read values are shifted by (for Kelvin use 273.15)
+        divider: Value to divide raw value by, defaults to 1000 (mv to V)
 
-        Returns:
-            list[int | float]: List of temperature values
+    Returns:
+        list[int | float]: List of temperature values
 
-        """
-        return [
-            (value - offset) / divider
-            for idx in range(values)
-            if (len(data) >= start + (idx + 1) * size)
-            and (
+    """
+    return [
+        (value - offset) / divider
+        for idx in range(values)
+        if (len(data) >= start + (idx + 1) * size)
+        and (
                 (
-                    value := int.from_bytes(
-                        data[start + idx * size : start + (idx + 1) * size],
-                        byteorder=byteorder,
-                        signed=signed,
+                    value := int_from_bytes(
+                        data[start + idx * size: start + (idx + 1) * size],
+                        byteorder,
+                        signed,
                     )
                 )
                 or (offset == 0)
-            )
-        ]
+        )
+    ]
 
 
 def crc_modbus(data: bytearray) -> int:

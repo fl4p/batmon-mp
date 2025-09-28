@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Upload-bmsble" type="micropython-tools-configuration-type" factoryName="micropython-tools-upload-configuration">
+    <option name="path" value="$PROJECT_DIR$/aiobmsble" />
+    <option name="switchToReplOnSuccess" value="true" />
+    <option name="uploadMode" value="2" />
+    <option name="uploadToPath" value="/aiobmsble" />
+    <method v="2" />
+  </configuration>
+</component>

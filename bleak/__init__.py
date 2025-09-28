@@ -1,6 +1,7 @@
 import asyncio
 
 import aioble
+from aioble import DeviceDisconnectedError
 from aioble.client import ClientService, ClientCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.uuids import normalize_uuid_str
@@ -37,7 +38,7 @@ class Char():
             self.properties.add('notify')
         if char.properties & _FLAG_WRITE_NO_RESPONSE:
             self.properties.add('write-without-response')
-        if char.properties & _FLAG_WRITE:
+        elif char.properties & _FLAG_WRITE:
             self.properties.add('write')
         # todo _FLAG_INDICATE etc..
 
@@ -130,6 +131,7 @@ class BleakClient(object):
             scan_duration_ms=timeout * 1000)
         if self._services is None:
             await self._discover_services()
+        assert self.is_connected
         print('connected', conn)
 
     async def disconnect(self):
@@ -153,15 +155,18 @@ class BleakClient(object):
 
     async def notify_loop(self):
         char: ClientCharacteristic
-        print('notify loop running..')
+        # print('notify loop running..')
         while self.is_connected and len(self.callback) > 0:
             for uuid, (cb, char) in self.callback.items():
                 try:
                     data = await char.notified(2000)
-                    print('got notified data', uuid, data, cb)
+                    #print('got notified data', uuid,len(data), data, cb)
+                    # print('got notified data', uuid, len(data))
                     cb(char, data)
                 except asyncio.TimeoutError:
                     pass
+                except DeviceDisconnectedError:
+                    break
         self.callback.clear()
         print('notify loop ended.')
 
@@ -177,6 +182,6 @@ class BleakClient(object):
 
 
     async def write_gatt_char(self, _char, data, response):
-        print('ble write gatt char TODO', _char, data, 'resp' if response else 'no-resp')  # TODO
+        # print('ble write gatt char', _char, data, 'resp' if response else 'no-resp')  # TODO
         await self.services.get_characteristic(_char)._char.write(data, response)
         # https://docs.micropython.org/en/latest/library/bluetooth.html#bluetooth.BLE.gattc_write

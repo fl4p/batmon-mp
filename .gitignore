@@ -1,0 +1,8 @@
+
+__pycache__/
+
+aioble/
+
+*.bin
+
+host/aiobmsble/

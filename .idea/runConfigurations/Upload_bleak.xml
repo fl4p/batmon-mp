@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Upload bleak" type="micropython-tools-configuration-type" factoryName="micropython-tools-upload-configuration">
+    <option name="path" value="$PROJECT_DIR$/bleak" />
+    <option name="selectedPaths">
+      <list>
+        <option value="$PROJECT_DIR$/bleak" />
+      </list>
+    </option>
+    <option name="uploadMode" value="2" />
+    <option name="uploadToPath" value="/bleak" />
+    <method v="2" />
+  </configuration>
+</component>
