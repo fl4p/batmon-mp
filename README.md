@@ -1,7 +1,7 @@
 # batmon-mp
 
 Monitor your batteries over Bluetooth LE on MicroPython.
-Includes HD44780 driver and time series storage for embedded flash storage.
+Includes HD44780 driver and a data logger that writes to the flash storage.
 
 # Install
 
@@ -31,6 +31,29 @@ DESIGN_CAP = 24         # battery design capacity
 Then reset the board and it should connect. See REPL for any errors.
 
 This project is heavily WIP.
+
+## Data Logging
+
+Using an optimized time series storage engine, the program records the following battery data:
+
+* timestamp (uint16)
+* voltage (float16)
+* current (float16)
+* temperature (uint8)
+* soc (uint8)
+* min cell voltage in mV (uint16)
+* max cell voltage in mV (uint16)
+* index of min & max cell (uint8)
+
+The resulting data frame has 13 bytes.
+The sampling rate slows down when current is close to zero and will increase with rising current
+or if voltage or soc reported by the BMS change significantly.
+If the database file reaches a certain size (~256kB) it is compressed
+and the program creates a new storage files (sharding).
+You can copy these shards any time from the device.
+With a 2 MB flash memory, it can capture up to 1 year of battery data. This strongly depends on battery usage.
+
+With an ESP32 you'll get a battery logger for just about $2.
 
 # Dev Notes
 
@@ -103,4 +126,4 @@ current issue:
 # TODO
 
 - send udp pakets (influxdb line proto)
-  - issue influxdb v1 needs timestamp
+    - issue influxdb v1 needs timestamp
