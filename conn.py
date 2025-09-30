@@ -64,6 +64,31 @@ async def close():
 bms: BMS = None
 
 
+async def connect_bms(tries=3):
+    while True:
+        lcd.backlight()
+        lcd.set_cursor(col=0, row=1)
+        lcd.print("Connecting " + dev_name)
+        lcd.blink()
+
+        device = await BleakScanner.find_device_by_name(dev_name)
+        if device is None:
+            logger.error("Device '%s' not found.", dev_name)
+            lcd.set_cursor(col=0, row=1)
+            lcd.print('Device not found')
+            if tries == 0:
+                raise Exception("Connection timed out")
+            await asyncio.sleep(10)
+            tries -= 1
+
+        else:
+            lcd.set_cursor(col=0, row=1)
+            lcd.print("Found " + dev_name + "    ")
+            logger.info("Found device: %s (%s)", device.name, device.address)
+
+            return device
+
+
 async def main() -> None:
     global bms, store
 
@@ -82,37 +107,9 @@ async def main() -> None:
         Col('minmax_idx', 'u8'),
     ])
 
-    async def connect_bms():
-        lcd.backlight()
-        lcd.set_cursor(col=0, row=1)
-        lcd.print("Connecting " + dev_name)
-        lcd.blink()
-
-        device = await BleakScanner.find_device_by_name(dev_name)
-        if device is None:
-            logger.error("Device '%s' not found.", dev_name)
-            lcd.set_cursor(col=0, row=1)
-            lcd.print('Device not found')
-
-        else:
-            return device
-
-    connect_tries = 0
     while True:
         try:
-            device = await connect_bms()
-
-            if not device:
-                await asyncio.sleep(10)
-                connect_tries += 1
-                if connect_tries > 3:
-                    raise Exception("Connection timed out")
-                else:
-                    continue
-
-            lcd.set_cursor(col=0, row=1)
-            lcd.print("Found " + dev_name + "    ")
-            logger.info("Found device: %s (%s)", device.name, device.address)
+            device = await connect_bms(tries=3)
 
             bms = BMS(ble_device=device, keep_alive=True)
             await bms._connect()
@@ -123,9 +120,9 @@ async def main() -> None:
             lcd.no_blink()
             lcd.no_cursor()
             lcd.home()
-
             lcd.backlight()
             lcd_bl_state = True
+
             t0 = time.time()
 
             def set_backlight(on):
@@ -148,8 +145,7 @@ async def main() -> None:
             data = await bms.async_update()
             cell_num = int(data['cell_count'])
             assert cell_num == len(data['cell_voltages'])
-            assert cell_num > 0 and cell_num <= 16
-            # we use a single byte to store index of min&max cell, and 16*16=256
+            assert cell_num > 0 and cell_num <= 16  # we use a single byte to store index of min&max cell, and 16*16=256
             print('cell_num:', cell_num)
 
             prev_data = {}
@@ -228,11 +224,11 @@ async def main() -> None:
                 elif abs(current) > DESIGN_CAP * 0.05:
                     store_interval = 16
                 elif abs(current) > 280 * 0.005:
-                    store_interval = 64
+                    store_interval = 128
                 else:
-                    store_interval = 256
+                    store_interval = 1024
 
-                store_interval //= 16
+                # store_interval //= 16
 
                 if current_acc_n >= store_interval:
                     current_mean = current_acc / current_acc_n
@@ -274,7 +270,7 @@ async def main() -> None:
                 lcd.print(line1)
                 lcd.home()
 
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 si += random.random() * 2
             await bms.disconnect()
         except KeyboardInterrupt as ex:

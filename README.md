@@ -39,13 +39,25 @@ async def loop():
          
         
 ble_bms:
-- expose is_connected + connect()
-* subscribe
-* uptime from bms frame
+[x]- expose is_connected + connect()
+[x] subscribe
 
+* uptime from bms frame
+* jk use charge/cap to find soc
+* cycle_capacity vs capacity vs charge confusion?
+* balance current not correct?
+* now way to check if data has arrived (JK)
+* cycle_capacity: int | float  # [Wh]
+* jk design_capacity missing
+* jikong uptime
+
+https://github.com/micropython/micropython/blob/e3ef68215605938c906196ae37120950d0eb6105/py/objint.c#L398
+https://docs.micropython.org/en/latest/genrst/builtin_types.html#to-bytes-method-doesn-t-implement-signed-parameter
 int.from_bytes(bytearray(b'\x9a\xce\xff\xff'), 'little', True)
 4294954650
 expected: -12646
+https://github.com/micropython/micropython/issues/15399
+
 
 
 ```
@@ -109,3 +121,7 @@ write flush 240 bytearray(b'\xce\tYR\xcc_\x7f(\x0b\x0eJ\x0e\xd0\tYR\xe0_\x7f(\x0
 2552 20% 24ß 5A 51V 3596 3659  Î
 
 ```
+
+
+# TODO 
+- send udp pakets

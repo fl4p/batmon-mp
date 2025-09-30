@@ -1,7 +1,14 @@
 """
 
 TODO:
-delete old shards if disk is full (notice by OSError)
+- delete old shards if disk is full (notice by OSError)
+- fix sharding (see below)
+- use delta-coding or delta-delta-coding + zig-zag
+- use variable length integer coding (varints)
+    https://github.com/fmoo/python-varint/blob/master/varint.py
+     Simple-8b (https://www.tigerdata.com/blog/time-series-compression-algorithms-explained#Simple-8b)
+     https://arxiv.org/abs/2101.08784
+- see https://tdengine.com/compressing-time-series-data/
 
 """
 import math
@@ -48,12 +55,16 @@ def compress_file(input_file, output_file, window=8, buf_size=128):
     import tamp
     import time
     t0 = time.time()
+    bw = 0
     with tamp.open(output_file, "wb", window=window) as dst:
         with open(input_file, "rb") as src:
             while len(b := src.read(buf_size)) > 0:
-                dst.write(b)
+                bw += dst.write(b)
     t1 = time.time()
-    print('ratio', round(os.stat(output_file)[6] / os.stat(input_file)[6], 2), 'took', round(t1 - t0, 2), 'sec')
+    # assert bw == os.stat(output_file)[6]
+    inp_size = os.stat(input_file)[6]
+    print('ratio', round(os.stat(output_file)[6] / inp_size, 2), 'took', round(t1 - t0, 2), 'sec',
+          round(inp_size / (t1 - t0) * 1e-3, 2), 'KB/s')
 
 
 class Store:
@@ -73,13 +84,15 @@ class Store:
                 if set(frame) == {0}:
                     continue
                 row = list(struct.unpack(fmt, frame))
-                if row[0] < t:
+                row.append(row[0])  # keep the original index value
+                if row[0] + t_off < t:
                     t_off = t - row[0] + 1
                 row[0] += t_off
                 t = row[0]
                 rows.append(row)
         import pandas
         cols = col_names.split(',')
+        cols.append('idx')  # original index value
         return pandas.DataFrame(rows, columns=cols).set_index(cols[0])
 
     def __init__(self, name, columns: list[Col], buf_num_frames=None):
@@ -101,6 +114,10 @@ class Store:
         self._fh: BinaryIO = None
         names = ','.join(c.name for c in columns)
         self._fn = f'{name}-{names}-{self._frame_fmt}.bin'
+        try:
+            self._fsize = os.stat(self._fn)[6]
+        except OSError:
+            self._fsize = 0
 
     def compress_data_file(self):
         # create a new compressed shard of the current data file
@@ -110,7 +127,7 @@ class Store:
         # TODO start from the top as old shards might have been deleted
         # instead of str(i) use the index, monotic, need to remeber it
         i = 0
-        while file_exists(tamp_fn := self._fn[:-3] + str(i) + '.tamp'):
+        while file_exists(tamp_fn := self._fn[:-3] + '%02i.tamp' % i):
             i += 1
 
         print('store creating new shard', tamp_fn, 'fsize', fsize)
@@ -119,8 +136,10 @@ class Store:
             self._fh.close()
             self._fh = None
 
-        compress_file(self._fn, tamp_fn)
+        compress_file(self._fn, tamp_fn + '.tmp', window=8)
+        os.rename(tamp_fn + '.tmp', tamp_fn)
         os.unlink(self._fn)
+        self._fsize = 0
 
     def open(self):
         fn = self._fn
@@ -129,6 +148,8 @@ class Store:
             fsize = os.stat(self._fn)[6]
         except OSError:
             fsize = 0
+
+        self._fsize = fsize
 
         # because we want to read the last row don't use mode 'a+b' here
         # instead we seek to the file end after opening
@@ -198,19 +219,20 @@ class Store:
         self._fh.seek(pos)
 
     def flush(self, sharding=False):
-        if self._fh is None and self._write_buf_pos == 0:
-            return
-        print('write flush', self._write_buf_pos, self._write_buf[:self._write_buf_pos])
-        if self._fh is None:
+        fh = self._fh
+        if fh is None:
+            if self._write_buf_pos == 0:
+                return
             self.open()
-        self._fh.write(self._write_buf[:self._write_buf_pos])
-        self._fh.flush()  # in case we loose power
+            fh = self._fh
+        # print('write flush', self._write_buf_pos, self._write_buf[:self._write_buf_pos])
+        self._fsize += fh.write(self._write_buf[:self._write_buf_pos])  # TODO use memoryview
+        fh.flush()  # in case we loose power
         # os.fsync()
         self._write_buf_pos = 0
 
         if sharding:
-            fsize = os.stat(self._fn)[6]
-            if fsize > 1024 * 256:
+            if self._fsize > (1024 * 256):
                 self.compress_data_file()
 
     def close(self):

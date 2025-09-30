@@ -4,6 +4,11 @@ __pycache__/
 aioble/
 
 *.bin
+*.bin0
+*.bin1
+*.bin2
+*.bin3
+*.bin*
 
 host/aiobmsble/
 
@@ -11,8 +16,7 @@ host/aiobmsble/
 
 *.tamp
 
-playground/wifi-secret.json
-
-playground/ble_secrets.json
+wifi-secret.json
+ble_secrets.json
 
 .DS_Store
