@@ -2,10 +2,10 @@ import logging
 import random
 import time
 
-# import influxdb
-from aiobmsble.bms.jikong_bms import BMS
 from bleak import BleakScanner
 from store import Store, Col
+
+# import influxdb
 
 # logging.basicConfig(level=logging.DEBUG)
 logger: logging.Logger = logging.getLogger(__name__)
@@ -15,6 +15,12 @@ import asyncio
 from lcd_i2c import LCD
 from machine import I2C, Pin
 
+#
+from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
+
+dev_name = "jk-pak01"  # # BMS name
+DESIGN_CAP = 24  # # battery design capacity
+
 # PCF8574 on 0x50
 I2C_ADDR = 0x27  # DEC 39, HEX 0x27
 NUM_ROWS = 2
@@ -22,9 +28,6 @@ NUM_COLS = 16
 i2c = I2C(0, scl=Pin(2), sda=Pin(1), freq=800000)
 lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
 store: Store | None = None
-
-dev_name = "jk-pak01"
-DESIGN_CAP = 24
 
 
 def argmax(a):
