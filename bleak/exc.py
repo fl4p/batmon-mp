@@ -1,3 +1,0 @@
-
-class BleakError():
-    pass

@@ -1,7 +1,7 @@
 # batmon-mp
 
 Monitor your batteries over Bluetooth LE on MicroPython.
-Includes HD44780 driver and a data logger that writes to the flash storage.
+Includes HD44780 driver for live monitoring and a data logger that writes to the flash storage.
 
 # Install
 

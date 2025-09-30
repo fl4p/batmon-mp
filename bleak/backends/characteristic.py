@@ -1,3 +1,0 @@
-
-class BleakGATTCharacteristic(object):
-    pass
