@@ -6,3 +6,13 @@ aioble/
 *.bin
 
 host/aiobmsble/
+
+*.mpy
+
+*.tamp
+
+playground/wifi-secret.json
+
+playground/ble_secrets.json
+
+.DS_Store

@@ -394,161 +394,154 @@ class BaseBMS(ABC):
 
         raise TimeoutError
 
+    async def disconnect(self, reset: bool = False) -> None:
+        """Disconnect the BMS, includes stoping notifications."""
 
-async def disconnect(self, reset: bool = False) -> None:
-    """Disconnect the BMS, includes stoping notifications."""
+        self._log.debug("disconnecting BMS (%s)", str(self._client.is_connected))
+        try:
+            self._data_event.clear()
+            if reset:
+                self._inv_wr_mode = None  # reset write mode
+            await self._client.disconnect()
+        except (BleakError, TimeoutError) as exc:
+            self._log.error("disconnect failed! (%s)", type(exc).__name__)
 
-    self._log.debug("disconnecting BMS (%s)", str(self._client.is_connected))
-    try:
+    async def _wait_event(self) -> None:
+        """Wait for data event and clear it."""
+        await self._data_event.wait()
         self._data_event.clear()
-        if reset:
-            self._inv_wr_mode = None  # reset write mode
-        await self._client.disconnect()
-    except (BleakError, TimeoutError) as exc:
-        self._log.error("disconnect failed! (%s)", type(exc).__name__)
 
+    @abstractmethod
+    async def _async_update(self) -> BMSsample:
+        """Return a dictionary of BMS values (keys need to come from the SENSOR_TYPES list)."""
 
-async def _wait_event(self) -> None:
-    """Wait for data event and clear it."""
-    await self._data_event.wait()
-    self._data_event.clear()
+    async def async_update(self) -> BMSsample:
+        """Retrieve updated values from the BMS using method of the subclass.
 
+        Args:
+            raw (bool): if true, the raw data from the BMS is returned without
+                any calculations or missing values added
 
-@abstractmethod
-async def _async_update(self) -> BMSsample:
-    """Return a dictionary of BMS values (keys need to come from the SENSOR_TYPES list)."""
+        Returns:
+            BMSsample: dictionary with BMS values
 
+        """
+        await self._connect()
 
-async def async_update(self) -> BMSsample:
-    """Retrieve updated values from the BMS using method of the subclass.
+        data: BMSsample = await self._async_update()
+        self._add_missing_values(data, self._calc_values())
 
-    Args:
-        raw (bool): if true, the raw data from the BMS is returned without
-            any calculations or missing values added
+        if not self._keep_alive:
+            # disconnect after data update to force reconnect next time (slow!)
+            await self.disconnect()
 
-    Returns:
-        BMSsample: dictionary with BMS values
+        return data
 
-    """
-    await self._connect()
-
-    data: BMSsample = await self._async_update()
-    self._add_missing_values(data, self._calc_values())
-
-    if not self._keep_alive:
-        # disconnect after data update to force reconnect next time (slow!)
-        await self.disconnect()
-
-    return data
-
-
-@staticmethod
-def _decode_data(
-        fields: tuple[BMSdp, ...],
-        data: bytearray | dict[int, bytearray],
-        *,
-        byteorder: Literal["little", "big"] = "big",
-        offset: int = 0,
-) -> BMSsample:
-    result: BMSsample = BMSsample()
-    for field in fields:
-        if isinstance(data, dict) and field.idx not in data:
-            continue
-        msg: bytearray = data[field.idx] if isinstance(data, dict) else data
-        # if field.key == 'current':
-        #    print(field.key, msg[offset + field.pos: offset + field.pos + field.size], byteorder, field.signed,
-        #          offset, field.pos, field.size)
-        result[field.key] = field.fct(
-            int_from_bytes(
-                msg[offset + field.pos: offset + field.pos + field.size],
-                byteorder,
-                field.signed,
-            )
-        )
-    return result
-
-
-@staticmethod
-def _cell_voltages(
-        data: bytearray,
-        *,
-        cells: int,
-        start: int,
-        size: int = 2,
-        byteorder: Literal["little", "big"] = "big",
-        divider: int = 1000,
-) -> list[float]:
-    """Return cell voltages from BMS message.
-
-    Args:
-        data: Raw data from BMS
-        cells: Number of cells to read
-        start: Start position in data array
-        size: Number of bytes per cell value (defaults 2)
-        byteorder: Byte order ("big"/"little" endian)
-        divider: Value to divide raw value by, defaults to 1000 (mv to V)
-
-    Returns:
-        list[float]: List of cell voltages in volts
-
-    """
-    return [
-        value / divider
-        for idx in range(cells)
-        if (len(data) >= start + (idx + 1) * size)
-        and (
-            value := int_from_bytes(
-                data[start + idx * size: start + (idx + 1) * size],
-                byteorder,
-                False,
-            )
-        )
-    ]
-
-
-@staticmethod
-def _temp_values(
-        data: bytearray,
-        *,
-        values: int,
-        start: int,
-        size: int = 2,
-        byteorder: Literal["little", "big"] = "big",
-        signed: bool = True,
-        offset: float = 0,
-        divider: int = 1,
-) -> list[int | float]:
-    """Return temperature values from BMS message.
-
-    Args:
-        data: Raw data from BMS
-        values: Number of values to read
-        start: Start position in data array
-        size: Number of bytes per cell value (defaults 2)
-        byteorder: Byte order ("big"/"little" endian)
-        signed: Indicates whether two's complement is used to represent the integer.
-        offset: The offset read values are shifted by (for Kelvin use 273.15)
-        divider: Value to divide raw value by, defaults to 1000 (mv to V)
-
-    Returns:
-        list[int | float]: List of temperature values
-
-    """
-    return [
-        (value - offset) / divider
-        for idx in range(values)
-        if (len(data) >= start + (idx + 1) * size)
-        and (
-                (
-                    value := int_from_bytes(
-                        data[start + idx * size: start + (idx + 1) * size],
-                        byteorder,
-                        signed,
-                    )
+    @staticmethod
+    def _decode_data(
+            fields: tuple[BMSdp, ...],
+            data: bytearray | dict[int, bytearray],
+            *,
+            byteorder: Literal["little", "big"] = "big",
+            offset: int = 0,
+    ) -> BMSsample:
+        result: BMSsample = BMSsample()
+        for field in fields:
+            if isinstance(data, dict) and field.idx not in data:
+                continue
+            msg: bytearray = data[field.idx] if isinstance(data, dict) else data
+            # if field.key == 'current':
+            #    print(field.key, msg[offset + field.pos: offset + field.pos + field.size], byteorder, field.signed,
+            #          offset, field.pos, field.size)
+            result[field.key] = field.fct(
+                int_from_bytes(
+                    msg[offset + field.pos: offset + field.pos + field.size],
+                    byteorder,
+                    field.signed,
                 )
-                or (offset == 0)
-        )
-    ]
+            )
+        return result
+
+    @staticmethod
+    def _cell_voltages(
+            data: bytearray,
+            *,
+            cells: int,
+            start: int,
+            size: int = 2,
+            byteorder: Literal["little", "big"] = "big",
+            divider: int = 1000,
+    ) -> list[float]:
+        """Return cell voltages from BMS message.
+
+        Args:
+            data: Raw data from BMS
+            cells: Number of cells to read
+            start: Start position in data array
+            size: Number of bytes per cell value (defaults 2)
+            byteorder: Byte order ("big"/"little" endian)
+            divider: Value to divide raw value by, defaults to 1000 (mv to V)
+
+        Returns:
+            list[float]: List of cell voltages in volts
+
+        """
+        return [
+            value / divider
+            for idx in range(cells)
+            if (len(data) >= start + (idx + 1) * size)
+            and (
+                value := int_from_bytes(
+                    data[start + idx * size: start + (idx + 1) * size],
+                    byteorder,
+                    False,
+                )
+            )
+        ]
+
+    @staticmethod
+    def _temp_values(
+            data: bytearray,
+            *,
+            values: int,
+            start: int,
+            size: int = 2,
+            byteorder: Literal["little", "big"] = "big",
+            signed: bool = True,
+            offset: float = 0,
+            divider: int = 1,
+    ) -> list[int | float]:
+        """Return temperature values from BMS message.
+
+        Args:
+            data: Raw data from BMS
+            values: Number of values to read
+            start: Start position in data array
+            size: Number of bytes per cell value (defaults 2)
+            byteorder: Byte order ("big"/"little" endian)
+            signed: Indicates whether two's complement is used to represent the integer.
+            offset: The offset read values are shifted by (for Kelvin use 273.15)
+            divider: Value to divide raw value by, defaults to 1000 (mv to V)
+
+        Returns:
+            list[int | float]: List of temperature values
+
+        """
+        return [
+            (value - offset) / divider
+            for idx in range(values)
+            if (len(data) >= start + (idx + 1) * size)
+            and (
+                    (
+                        value := int_from_bytes(
+                            data[start + idx * size: start + (idx + 1) * size],
+                            byteorder,
+                            signed,
+                        )
+                    )
+                    or (offset == 0)
+            )
+        ]
 
 
 def crc_modbus(data: bytearray) -> int:

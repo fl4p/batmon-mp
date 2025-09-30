@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="MicroPythonTools">
+    <option name="autoClearRepl" value="false" />
     <option name="pluginEnabled" value="true" />
-    <option name="portName" value="/dev/cu.usbmodem1101" />
+    <option name="portName" value="/dev/cu.usbmodem2101" />
     <option name="showUploadPreviewDialog" value="false" />
   </component>
 </project>

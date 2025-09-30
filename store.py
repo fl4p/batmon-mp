@@ -1,3 +1,9 @@
+"""
+
+TODO:
+delete old shards if disk is full (notice by OSError)
+
+"""
 import math
 import os
 import struct
@@ -64,6 +70,8 @@ class Store:
         t_off = 0
         with open(file_path, 'rb') as fh:
             while len(frame := fh.read(frame_size)) == frame_size:
+                if set(frame) == {0}:
+                    continue
                 row = list(struct.unpack(fmt, frame))
                 if row[0] < t:
                     t_off = t - row[0] + 1
@@ -99,6 +107,8 @@ class Store:
         fsize = os.stat(self._fn)[6]
         assert fsize >= 1024 * 16, "data file too small to compress " + str(fsize)
 
+        # TODO start from the top as old shards might have been deleted
+        # instead of str(i) use the index, monotic, need to remeber it
         i = 0
         while file_exists(tamp_fn := self._fn[:-3] + str(i) + '.tamp'):
             i += 1
@@ -115,16 +125,31 @@ class Store:
     def open(self):
         fn = self._fn
 
-        self._fh = open(fn, 'a+b')
+        try:
+            fsize = os.stat(self._fn)[6]
+        except OSError:
+            fsize = 0
 
-        fsize = os.stat(self._fn)[6]
+        # because we want to read the last row don't use mode 'a+b' here
+        # instead we seek to the file end after opening
+        self._fh = open(fn, 'r+b' if fsize else 'w+b')  # https://stackoverflow.com/a/58925279/2950527
+
+        print('store opened ', self._fn, 'fsize=', fsize, 'with', fsize / self._frame_size, 'rows')
 
         pad = fsize % self._frame_size
         if pad != 0:
             print('file size is not a multiple of frame size, padding..', fsize, self._frame_size)
+            self._fh.seek(fsize)
             self._fh.write(b'\x00' * pad)
             self._fh.flush()
-        print('store opened ', self._fn, 'fsize=',fsize, 'with', fsize / self._frame_size, 'rows')
+        else:
+            if fsize >= self._frame_size:
+                print('seeking to end', fsize - self._frame_size)
+                self._fh.seek(fsize - self._frame_size)
+                buf = self._fh.read(self._frame_size)
+                last_row = struct.unpack(self._frame_fmt, buf)
+                print('last row', buf, last_row)
+            self._fh.seek(fsize)
 
     def add_sample(self, row: dict):
         for r in row.keys():
@@ -155,19 +180,9 @@ class Store:
         assert (len(frame) == self._frame_size)
         self._write_buf[self._write_buf_pos:self._write_buf_pos + self._frame_size] = frame
         self._write_buf_pos += self._frame_size
+
         if self._write_buf_pos == len(self._write_buf):
-            # print('write flush', len(self._write_buf))
-            if self._fh is None:
-                self.open()
-            self._fh.write(self._write_buf)
-            self._fh.flush() # in case we loose power
-
-            fsize = os.stat(self._fn)[6]
-            if fsize > 1024 * 256:
-                self.compress_data_file()
-
-            # os.fsync()
-            self._write_buf_pos = 0
+            self.flush(sharding=True)
         else:
             assert self._write_buf_pos < len(self._write_buf)
 
@@ -182,6 +197,26 @@ class Store:
             print(struct.unpack(self._frame_fmt, frame))
         self._fh.seek(pos)
 
+    def flush(self, sharding=False):
+        if self._fh is None and self._write_buf_pos == 0:
+            return
+        print('write flush', self._write_buf_pos, self._write_buf[:self._write_buf_pos])
+        if self._fh is None:
+            self.open()
+        self._fh.write(self._write_buf[:self._write_buf_pos])
+        self._fh.flush()  # in case we loose power
+        # os.fsync()
+        self._write_buf_pos = 0
+
+        if sharding:
+            fsize = os.stat(self._fn)[6]
+            if fsize > 1024 * 256:
+                self.compress_data_file()
+
+    def close(self):
+        self.flush()
+        self._fh.close()
+
 
 def test_pack():
     fmt = 'heeBHH'
@@ -195,8 +230,6 @@ def test_pack():
         inp = [i, 48 + i / 1000, 6 * i / 1000, 25 + int(i / 1000 * 20), 25 + int(i / 1000 * 40), 2000 + i, 2033 + i]
         res = struct.unpack('HeeBBHH', struct.pack('HeeBBHH', *inp))
         assert max(abs((inp[i] - res[i]) / inp[i]) for i in range(0, len(inp))) < 0.1, (inp, res)
-
-
 
 
 def test_store():
@@ -214,14 +247,16 @@ def test_store():
             dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5), soc2=abs(math.sin(i / 50)) * 100 * 2,
                  cell_min=3340, cell_max=5446))
 
-    #store.compress_data_file()
+    # store.compress_data_file()
     # store.read()
 
     for _ in range(0, 3):
         for i in range(0, 20000):
             store.add_sample(
-            dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5), soc2=abs(math.sin(i / 50)) * 100 * 2,
-                 cell_min=3340, cell_max=5446))
+                dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5),
+                     soc2=abs(math.sin(i / 50)) * 100 * 2,
+                     cell_min=3340, cell_max=5446))
+
 
 if __name__ == '__main__':
     test_pack()

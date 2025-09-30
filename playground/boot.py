@@ -5,7 +5,9 @@ import time
 
 import machine
 
-import conn
+#import conn
+
+
 
 
 def connect_wifi():
@@ -15,24 +17,15 @@ def connect_wifi():
         print('connecting to network...')
         sta_if.active(True)
         with open('wifi-secret.json', 'r') as f:
-            sta_if.connect(**json.load(f))
+            sta_if.connect(*json.load(f))
         while not sta_if.isconnected():
             pass
     print('network config:', sta_if.ipconfig('addr4'))
 
+    # This file is executed on every boot (including wake-boot from deepsleep)
+    #import esp
+    #esp.osdebug(None)
+    #import webrepl
+    #webrepl.start()
 
-try:
-    asyncio.run(conn.main())
-except KeyboardInterrupt:
-    print('boot:KeyboardInterrupt')
-    asyncio.run(conn.close())
-
-except Exception as e:
-
-    # put this raise for debugging stack traces
-    #raise
-    sys.print_exception(e)
-
-    print('reset in 10 seconds')
-    time.sleep(10)
-    machine.reset()
+connect_wifi()
