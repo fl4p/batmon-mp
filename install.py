@@ -10,7 +10,9 @@ deps = [
     'github:josverl/micropython-stubs/mip/typing.json',
     'logging',
     'abc',
-    'types',]
+    'types',
+    'github:brianpugh/tamp/package-compressor.json',
+]
 
 for dep in deps:
     mip.install(dep)
