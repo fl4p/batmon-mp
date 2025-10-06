@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import random
 import time
 
@@ -96,7 +97,7 @@ async def main() -> None:
     lcd.print("Hello World!")
 
     store = Store(dev_name, [
-        Col('time', 'u16'),
+        Col('time', 'u16', monotonic=True),
         Col('voltage', 'u16'),
         Col('current', 'i16'),
         Col('temp2', 'u8'),  # y = (x+40)*2, so temperates [-40, 88] can stored
@@ -239,11 +240,11 @@ async def main() -> None:
                     try:
                         print('store point I=', current_mean)
                         store.add_sample(dict(
-                            time=int(now),
-                            voltage=int(round(data['voltage']*100)),
-                            current=int(round(current_mean*100)),
-                            temp2=((max(-40, temp_mean) + 40) * 2),
-                            soc2=(data['battery_level'] * 2),
+                            time=int(math.ceil(now / 10)),  # ceil: prevents look-ahead
+                            voltage=int(round(data['voltage'] * 100)),
+                            current=int(round(current_mean * 100)),
+                            temp2=int(round((max(-40, temp_mean) + 40) * 2)),
+                            soc2=int(round(data['battery_level'] * 2)),
                             cell_min=cell_min,
                             cell_max=cell_max,
                             minmax_idx=cell_max_idx * cell_num + cell_min_idx,
