@@ -1,9 +1,10 @@
+import os
 import struct
 from io import BytesIO
 
-from store import Store
-
-from mints.coding import ZigZagDecode, ZigZagEncode
+from mints import Store
+from mints.coding import ZigZagDecode, ZigZagEncode, SignedVarintEncode, SignedVarintDecode
+from mints.test import assert_array_equal
 
 
 def main():
@@ -15,6 +16,8 @@ def main():
     df = df.drop(columns=['idx'])
 
     fmt = 'HeeBBHH'
+
+    total_colwise_comp_size = 0
 
     for ci in range(len(df.columns)):
         col = df.columns[ci]
@@ -30,8 +33,11 @@ def main():
         # comp_size = compress_file(f'test_col_{col}.bin', '_test.tamp')
         print('column', col, 'has ', len(buf), ' bytes', 'compressed to', comp_size, '(',
               round(100 * comp_size / len(buf)),
-              '%')
+              '% )')
 
+        if df.dtypes.iloc[ci].name.startswith('float'):
+            df.iloc[:,ci] = (df.iloc[:,ci]*100).round().astype(int)
+            df = df.astype({col: int}, copy=False)
         # delta coding
         if df.dtypes.iloc[ci].name.startswith('int'):
             buf2 = BytesIO()
@@ -42,35 +48,35 @@ def main():
                 v = df.iloc[i, ci]
                 deltas.append(v - l)
                 d = ZigZagEncode(v - l)
-                w+=_EncodeSignedVarint(buf2.write, d)
+                w += SignedVarintEncode(buf2.write, d)
                 # buf += struct.pack(fmt[ci], v - l)
                 l = v
             buf2.seek(0)
             buf2 = buf2.read()
             n = len(buf2)
-            #assert w == n, (w,n)
+            # assert w == n, (w,n)
             i = 0
             deltas.reverse()
             while i < n:
-                r, i = _DecodeSignedVarint(buf2, i)
+                r, i = SignedVarintDecode(buf2, i)
                 d = ZigZagDecode(r)
                 assert d == deltas.pop()
-            print('   ', 'delta+zigzag+varint', n, '(', round(100 * n / len(buf)), '%', '+tamp',
+            assert_array_equal(buf2, decompress_bytes(compress_bytes(buf2), max_len=len(buf2))[:len(buf2)])
+            print('   ', 'delta+zigzag+varint', n, '(', round(100 * n / len(buf)), '%', '|tamp:',
                   round(100 * len(compress_bytes(buf2)) / len(buf)), '%')
-            print(buf2[:20])
 
-        print(list(df.iloc[0:20, ci]))
+            total_colwise_comp_size += len(compress_bytes(buf2))
+        else:
+            total_colwise_comp_size = float('nan')
+            # print(buf2[:20])
 
-
-
-
-
+        # print(list(df.iloc[0:20, ci]))
+    print('total colwise comp ratio', total_colwise_comp_size/os.stat(inp_file).st_size)
 
 
 def compress_bytes(inp: bytearray, window=8, buf_size=128):
     import tamp
     import time
-    t0 = time.time()
     bw = 0
     dst_bytes = BytesIO()
     src = BytesIO(inp)
@@ -79,6 +85,21 @@ def compress_bytes(inp: bytearray, window=8, buf_size=128):
             bw += dst.write(b)
     dst_bytes.seek(0)
     return dst_bytes.read(-1)
+
+def decompress_bytes(inp: bytearray, window=8, buf_size=128, max_len=None):
+    import tamp
+    import time
+    bw = 0
+    br = 0
+    dst = BytesIO()
+    with tamp.open(BytesIO(inp), "rb") as src:
+        while len(b := src.read(buf_size)) > 0:
+            bw += dst.write(b)
+            br +=len(b)
+            if max_len and br >= max_len:
+                break
+    dst.seek(0)
+    return dst.read(-1)
 
 
 main()

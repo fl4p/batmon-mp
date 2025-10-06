@@ -17,14 +17,13 @@ import os
 import struct
 from typing import BinaryIO
 
-
 DTypes = dict(
     # https://docs.python.org/3/library/struct.html#format-characters
     i8='b',
     u8='B',
-    i16='h', # TODO varint
-    u16='H', # TODO varint
-    i32='i', # TODO varint
+    i16='h',
+    u16='H',
+    i32='i',
     u32='I',
     f64='d',
     f32='f',
@@ -46,11 +45,12 @@ def file_exists(path: str) -> bool:
 
 class Col:
 
-    def __init__(self, name, dtype, default_val=0):
+    def __init__(self, name, dtype, default_val=0, monotonic=False):
         assert dtype in DTypes
         self.name = name
         self.dtype = dtype
         self.default_val = default_val
+        self.monotonic = monotonic
 
 
 class Store:
@@ -97,7 +97,7 @@ class Store:
         self._write_buf_pos = 0
 
         print('frame fmt', self._frame_fmt, 'len', self._frame_size, 'buf_num_frames', buf_num_frames)
-        self._fh: BinaryIO = None
+        self._fh: BinaryIO | None = None
         names = ','.join(c.name for c in columns)
         self._fn = f'{name}-{names}-{self._frame_fmt}.bin'
         try:
@@ -122,9 +122,21 @@ class Store:
             self._fh.close()
             self._fh = None
 
-        from mints.coding import compress_file
-        compress_file(self._fn, tamp_fn + '.tmp', window=8)
+        read_frame = struct.Struct(self._frame_fmt).unpack
+        from mints.shard import ShardStore
+        shard = ShardStore(self.columns, tamp_fn + '.tmp', tamp_window=8)
+        with open(self._fn, 'rb') as fh:
+            while len(frame := fh.read(self._frame_size)) == self._frame_size:
+                vals = read_frame(frame)
+                shard.add_sample(vals)
+        shard.close()
+
+        # This was the old way:
+        # from mints.coding import compress_file
+        # compress_file(self._fn, tamp_fn + '.tmp', window=8)
+
         os.rename(tamp_fn + '.tmp', tamp_fn)
+
         os.unlink(self._fn)
         self._fsize = 0
 
