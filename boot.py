@@ -5,7 +5,7 @@ import time
 
 import machine
 
-import conn
+import batmon
 
 
 def connect_wifi():

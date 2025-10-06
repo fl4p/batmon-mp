@@ -1,22 +1,15 @@
+import asyncio
 import logging
 import random
 import time
 
-from bleak import BleakScanner
-from store import Store, Col
-
-# import influxdb
-
-# logging.basicConfig(level=logging.DEBUG)
-logger: logging.Logger = logging.getLogger(__name__)
-
-import asyncio
-
+# noinspection PyUnresolvedReferences
 from lcd_i2c import LCD
 from machine import I2C, Pin
 
-#
 from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
+from bleak import BleakScanner
+from mints import Store, Col
 
 dev_name = "jk-pak01"  # # BMS name
 DESIGN_CAP = 24  # # battery design capacity
@@ -28,6 +21,9 @@ NUM_COLS = 16
 i2c = I2C(0, scl=Pin(2), sda=Pin(1), freq=800000)
 lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
 store: Store | None = None
+
+# logging.basicConfig(level=logging.DEBUG)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def argmax(a):
@@ -64,7 +60,7 @@ async def close():
         await bms.disconnect()
 
 
-bms: BMS = None
+bms: BMS | None = None
 
 
 async def connect_bms(tries=3):
@@ -101,8 +97,8 @@ async def main() -> None:
 
     store = Store(dev_name, [
         Col('time', 'u16'),
-        Col('voltage', 'f16'),
-        Col('current', 'f16'),
+        Col('voltage', 'u16'),
+        Col('current', 'i16'),
         Col('temp2', 'u8'),  # y = (x+40)*2, so temperates [-40, 88] can stored
         Col('soc2', 'u8'),
         Col('cell_min', 'u16'),
@@ -244,8 +240,8 @@ async def main() -> None:
                         print('store point I=', current_mean)
                         store.add_sample(dict(
                             time=int(now),
-                            voltage=data['voltage'],
-                            current=current_mean,
+                            voltage=int(round(data['voltage']*100)),
+                            current=int(round(current_mean*100)),
                             temp2=((max(-40, temp_mean) + 40) * 2),
                             soc2=(data['battery_level'] * 2),
                             cell_min=cell_min,

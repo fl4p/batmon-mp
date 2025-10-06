@@ -10,20 +10,21 @@ TODO:
      Simple-8b (https://www.tigerdata.com/blog/time-series-compression-algorithms-explained#Simple-8b)
      https://arxiv.org/abs/2101.08784
 - see https://tdengine.com/compressing-time-series-data/
+- https://github.com/michaeljclark/vf128
 
 """
-import math
 import os
 import struct
 from typing import BinaryIO
+
 
 DTypes = dict(
     # https://docs.python.org/3/library/struct.html#format-characters
     i8='b',
     u8='B',
-    i16='h',
-    u16='H',
-    i32='i',
+    i16='h', # TODO varint
+    u16='H', # TODO varint
+    i32='i', # TODO varint
     u32='I',
     f64='d',
     f32='f',
@@ -50,23 +51,6 @@ class Col:
         self.name = name
         self.dtype = dtype
         self.default_val = default_val
-
-
-def compress_file(input_file, output_file, window=8, buf_size=128):
-    import tamp
-    import time
-    t0 = time.time()
-    bw = 0
-    with tamp.open(output_file, "wb", window=window) as dst:
-        with open(input_file, "rb") as src:
-            while len(b := src.read(buf_size)) > 0:
-                bw += dst.write(b)
-    t1 = time.time()
-    # assert bw == os.stat(output_file)[6]
-    inp_size = os.stat(input_file)[6]
-    print('ratio', round(os.stat(output_file)[6] / inp_size, 2), 'took', round(t1 - t0, 2), 'sec',
-          round(inp_size / (t1 - t0) * 1e-3, 2), 'KB/s')
-    return bw
 
 
 class Store:
@@ -138,6 +122,7 @@ class Store:
             self._fh.close()
             self._fh = None
 
+        from mints.coding import compress_file
         compress_file(self._fn, tamp_fn + '.tmp', window=8)
         os.rename(tamp_fn + '.tmp', tamp_fn)
         os.unlink(self._fn)
@@ -240,53 +225,3 @@ class Store:
     def close(self):
         self.flush()
         self._fh.close()
-
-
-def test_pack():
-    fmt = 'heeBHH'
-    assert struct.calcsize(fmt) == len(struct.pack(fmt, *bytearray(len(fmt))))
-
-    inp = [12, 53.4563, -12.0345]
-    res = struct.unpack('hee', struct.pack('hee', *inp))
-    assert max(abs((inp[i] - res[i]) / inp[i]) for i in range(0, len(inp))) < 0.1, (inp, res)
-
-    for i in range(1, 1000):
-        inp = [i, 48 + i / 1000, 6 * i / 1000, 25 + int(i / 1000 * 20), 25 + int(i / 1000 * 40), 2000 + i, 2033 + i]
-        res = struct.unpack('HeeBBHH', struct.pack('HeeBBHH', *inp))
-        assert max(abs((inp[i] - res[i]) / inp[i]) for i in range(0, len(inp))) < 0.1, (inp, res)
-
-
-def test_store():
-    store = Store('test', [
-        Col('time', 'i16'),
-        Col('voltage', 'f16'),
-        Col('current', 'f16'),
-        Col('soc2', 'u8'),
-        Col('cell_min', 'u16'),
-        Col('cell_max', 'u16'),
-    ])
-
-    for i in range(0, 2000):
-        store.add_sample(
-            dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5), soc2=abs(math.sin(i / 50)) * 100 * 2,
-                 cell_min=3340, cell_max=5446))
-
-    # store.compress_data_file()
-    # store.read()
-
-    for _ in range(0, 3):
-        for i in range(0, 20000):
-            store.add_sample(
-                dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5),
-                     soc2=abs(math.sin(i / 50)) * 100 * 2,
-                     cell_min=3340, cell_max=5446))
-
-
-if __name__ == '__main__':
-    test_pack()
-    test_store()
-"""
-from store import Store, Col
-s = Store([Col('time', 'i16'), Col('voltage', 'f16'), ])
-s.add_sample(dict(time=12.1, voltage=50.4))
-"""
