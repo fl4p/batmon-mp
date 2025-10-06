@@ -5,6 +5,7 @@ TODO:
 - fix sharding (see below)
 - use delta-coding or delta-delta-coding + zig-zag
 - use variable length integer coding (varints)
+    https://github.com/protocolbuffers/protobuf/blob/main/python/google/protobuf/internal/encoder.py
     https://github.com/fmoo/python-varint/blob/master/varint.py
      Simple-8b (https://www.tigerdata.com/blog/time-series-compression-algorithms-explained#Simple-8b)
      https://arxiv.org/abs/2101.08784
@@ -65,6 +66,7 @@ def compress_file(input_file, output_file, window=8, buf_size=128):
     inp_size = os.stat(input_file)[6]
     print('ratio', round(os.stat(output_file)[6] / inp_size, 2), 'took', round(t1 - t0, 2), 'sec',
           round(inp_size / (t1 - t0) * 1e-3, 2), 'KB/s')
+    return bw
 
 
 class Store:
