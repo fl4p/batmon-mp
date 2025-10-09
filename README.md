@@ -13,13 +13,13 @@ Then copy these files to your device:
 
 ```
 boot.py
-conn.py
+batmon.py
 store.py
 aiobmsble/*
 lib/enum/*
 ```
 
-Edit conn.py:
+Edit `batmon.py`:
 
 ```
 from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
@@ -54,6 +54,24 @@ You can copy these shards any time from the device.
 With a 2 MB flash memory, it can capture up to 1 year of battery data. This strongly depends on battery usage.
 
 With an ESP32 you'll get a battery logger for just about $2.
+
+## Efficient time series storage
+
+When comparing embedded flash storage with ordinary SSDs we find two main differences:
+it is small and it wears out quickly.
+Most flashes have a block size of 256 bytes. Only a full block can be erased, that means, if only one byte is written to a
+block, and we want to write another, the whole block needs to be erased first and then re-writing the already present byte and
+the new byte. Flash cells have a lifetime of around 100k erases.
+
+https://github.com/micropython/micropython/tree/master/lib/oofatfs
+ * oofatfs uses `disk_write` (defined here https://github.com/micropython/micropython/blob/master/extmod/vfs_fat_diskio.c)
+ * `disk_write` uses `mp_vfs_blockdev_write` https://github.com/micropython/micropython/blob/master/extmod/vfs_blockdev.c#L90
+ * https://elm-chan.org/fsw/ff/
+https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/file-system-considerations.html
+
+* buffer data in memory until we can write a block
+* varint coding most effective with delta coding
+* for non-monotonic series, prior to varint apply zigZagcoding to delta values to move the sign to the end
 
 # Dev Notes
 
@@ -127,3 +145,5 @@ current issue:
 
 - send udp pakets (influxdb line proto)
     - issue influxdb v1 needs timestamp
+- clone bms to act as a proxy
+- store: delta+varint coding + zigzag?

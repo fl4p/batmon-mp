@@ -124,7 +124,7 @@ class Store:
 
         read_frame = struct.Struct(self._frame_fmt).unpack
         from mints.shard import ShardStore
-        shard = ShardStore(self.columns, tamp_fn + '.tmp', tamp_window=8)
+        shard = ShardStore(self.columns, tamp_fn + '.tmp')
         with open(self._fn, 'rb') as fh:
             while len(frame := fh.read(self._frame_size)) == self._frame_size:
                 vals = read_frame(frame)

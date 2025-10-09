@@ -1,27 +1,41 @@
 import os
 import time
 
-from store import Store
+from mints import Store
+
+# from store import Store
 
 funcs = {}
 
-import zlib
+try:
+    import zlib
 
-funcs['zlib_w10'] = lambda d: zlib.compress(d, wbits=10)
-funcs['zlib_w15'] = lambda d: zlib.compress(d, wbits=15)
+    funcs['zlib_w10'] = lambda d: zlib.compress(d, wbits=10)
+    funcs['zlib_w15'] = lambda d: zlib.compress(d, wbits=15)
+except ImportError:
+    pass
 
-import lzma
+try:
+    import lzma
 
-funcs['lzma_fXZ'] = lambda d: lzma.compress(d, format=lzma.FORMAT_XZ)
-funcs['lzma_fA'] = lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE)
-funcs['lzma_pEX'] = lambda d: lzma.compress(d, preset=lzma.PRESET_EXTREME)
+    funcs['lzma_fXZ'] = lambda d: lzma.compress(d, format=lzma.FORMAT_XZ)
+    funcs['lzma_fA'] = lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE)
+    funcs['lzma_pEX'] = lambda d: lzma.compress(d, preset=lzma.PRESET_EXTREME)
 
+except ImportError:
+    pass
+
+
+from lz4.block import compress as lz4_compress, decompress as lz4_decompress
+funcs['lz4_HC'] = lambda _str: lz4_compress(_str, mode='high_compression')
 
 import brotli
+
 funcs['brotli_q11'] = lambda d: brotli.compress(d, quality=11)
-#funcs['brotli_q11'] = lambda d: brotli.compress(d, quality=11)
+# funcs['brotli_q11'] = lambda d: brotli.compress(d, quality=11)
 
 import snappy
+
 funcs['snappy'] = lambda d: snappy.compress(d)
 
 try:
@@ -38,8 +52,7 @@ except ImportError:
     pass
 
 
-
-def compress_file(input_file, window=8, buf_size=128):
+def compress_file_tamp(input_file, window=8, buf_size=128):
     import tamp
     t0 = time.time()
     with tamp.open("test.tamp", "wb", window=window) as dst:
@@ -51,7 +64,7 @@ def compress_file(input_file, window=8, buf_size=128):
           'sec')
 
 
-def decompress_file(input_file, out_file, buf_size=128, max_len=0):
+def decompress_file_tamp(input_file, out_file, buf_size=128, max_len=0):
     import tamp
     t0 = time.time()
     n = 0
@@ -72,8 +85,8 @@ def decompress_file(input_file, out_file, buf_size=128, max_len=0):
 inp_file = '../dl/jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
 # inp_file = 'jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
 # inp_file = 'conn.py'
-compress_file(inp_file)
-decompress_file("test.tamp", "test.bin", buf_size=1024 * 4, max_len=os.stat(inp_file).st_size)
+compress_file_tamp(inp_file)
+decompress_file_tamp("test.tamp", "test.bin", buf_size=1024 * 4, max_len=os.stat(inp_file).st_size)
 assert open('test.bin', 'rb').read()[:os.stat(inp_file).st_size] == open(inp_file, 'rb').read()
 
 # compress_file('jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin')
@@ -83,18 +96,15 @@ with open(inp_file, 'rb') as f:
 
 print('input len', len(dat))
 
-
-
 for name, func in funcs.items():
     t0 = time.perf_counter()
     c = func(dat)
     dt = time.perf_counter() - t0
-    print('%12s' % name, round(len(c) / len(dat), 5), 'ticks=', round(dt, 6) )
-
-
+    print('%12s' % name, round(len(c) / len(dat), 5), 'ticks=', round(dt*1000, 2), 'm')
 
 import io
+
 buf = io.BytesIO()
 Store.read_file_to_pandas(inp_file).to_parquet(buf, engine='pyarrow', compression='snappy')
-#buf.seek(0)
-print('pyarrow', buf.tell()/len(dat))
+# buf.seek(0)
+print('pyarrow', buf.tell() / len(dat))

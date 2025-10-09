@@ -22,3 +22,5 @@ ble_secrets.json
 .DS_Store
 
 playground/
+
+test_main.dist/

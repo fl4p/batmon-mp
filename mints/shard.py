@@ -4,6 +4,8 @@ from mints import Col, DTypes
 from mints.coding import ZigZagEncode, SignedVarintEncode, UnsignedVarintEncode, SignedVarintDecode, ZigZagDecode, \
     UnsignedVarintDecode
 
+TAMP_WINDOW = 12
+
 
 class ShardStoreReader:
     def __init__(self, columns: list[Col], file_path):
@@ -46,30 +48,36 @@ class ShardStoreReader:
 
 
 class ShardStore:
-    def __init__(self, columns: list[Col], output_file, tamp_window=8):
+    def __init__(self, columns: list[Col], output_file, tamp_window=TAMP_WINDOW):
         self.columns = columns
         self._row_prev = [0] * len(columns)
         import tamp
         self._fh = tamp.open(output_file, "wb", window=tamp_window)
 
+        self._pack_funcs = [struct.Struct(DTypes[col.dtype]).pack for col in columns]
+
     def add_sample(self, row: tuple):
-        write = lambda b: self._fh.write(b)
+        # write = lambda b: self._fh.write(b)
+        write = self._fh.write
         n_written = 0
 
         cols = self.columns
+        pack_funcs = self._pack_funcs
         row_prev = self._row_prev
 
         assert len(row) == len(cols)
+
         for i in range(len(cols)):
             col = cols[i]
             if not is_varint_type(col.dtype):
-                n_written += write(struct.pack(DTypes[col.dtype], row[i]))  # ordinary pack
+                n_written += write(pack_funcs[i](row[i]))  # ordinary pack
             else:
                 d = row[i] - row_prev[i]
                 row_prev[i] = row[i]
                 if col.monotonic:
                     if d < 0:
-                        row_prev[i] += -d + 1
+                        # row_prev[i] += -d + 1
+                        row_prev[i] = row[i] - 1
                         d = 1
                     n_written += UnsignedVarintEncode(write, d)
                 else:
