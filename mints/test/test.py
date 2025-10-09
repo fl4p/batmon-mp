@@ -3,9 +3,9 @@ import os
 import random
 import struct
 
-from mints import Store, Col
-from mints.coding import ZigZagEncode, ZigZagDecode, SignedVarintEncode, SignedVarintDecode
-from mints.shard import ShardStoreReader, ShardStore
+from .. import Store, Col
+from ..coding import ZigZagEncode, ZigZagDecode, SignedVarintEncode, SignedVarintDecode
+from ..shard import ShardStoreReader, ShardStore
 
 
 def test_store():
@@ -32,6 +32,10 @@ def test_store():
                 dict(time=i, voltage=12 + math.sin(i / 5), current=math.sin(i / 5),
                      soc2=abs(math.sin(i / 50)) * 100 * 2,
                      cell_min=3340, cell_max=5446))
+
+    import glob
+    for fn in glob.glob('test-time,voltage,*'):
+        os.unlink(fn)
 
 
 def test_pack():
@@ -177,13 +181,16 @@ def assert_array_equal(a, b):
     assert bytes(a) == bytes(b)
 
 
-if __name__ == '__main__':
+def _main():
     test_pack()
     test_zigzag_coding()
     test_varint_coding()
     # test_compress_file()
-    # test_store()
+    test_store()
     test_shard_store()
+
+if __name__ == '__main__':
+    _main()
 
 """
 from store import Store, Col
