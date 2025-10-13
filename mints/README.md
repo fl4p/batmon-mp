@@ -1,7 +1,7 @@
 # MinTS
 
-This is a time series storage for embedded systems for MicroPython, primarely intended for long term data logging.
-It will also work in ordinary (non-embedded) python environments.
+This is a time series storage for MicroPython on embedded systems (Arduino, Esp32, STM32 etc), with the primary
+intention of long term data logging. It will  work in ordinary (non-embedded) python environments too.
 
 Querying data and indexing is currently not implemented and probably out of scope of this project.
 It rather expects the user to transfer the collected data from the embedded flash for further analysis
@@ -10,6 +10,8 @@ on another computer. There your can use `Store.read_file_to_pandas()` to read th
 It employs common compression techniques, where only value changes are stored (delta or differential coding).
 These delta values are then encoded with a variable length integer code, after a ZigZag transform, which optimizes
 coding of the sign. A final huffman code tries to further reduce the bit-rate. All compression is lossless.
+
+Where data could be lost at the event of power loss, it creates a copy and then renames the files.
 
 ## Example
 
@@ -76,7 +78,7 @@ For minimum size usage consider these points:
 * `uint16` for storing the timestamp is enough for most of the use cases. Integer overflow is internally handled
 * Think about what precision do you really need. For many applications a time resolution of 10 seconds is enough.
   this keeps the encoded timestamps 1 byte long for sampling intervals up to 1270 seconds.
-  If you sample every 21 minutes, the timestamp is encoded within a single byte
+  If you sample every 21 minutes or more frequent, the timestamp is encoded within a single byte
 * You might want to try different values for `TAMP_WINDOW`, which controls the window size of the huffman code
 
 ## Example: Battery Management System
