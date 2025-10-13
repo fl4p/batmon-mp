@@ -21,6 +21,7 @@ try:
     funcs['lzma_fXZ'] = lambda d: lzma.compress(d, format=lzma.FORMAT_XZ)
     funcs['lzma_fA'] = lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE)
     funcs['lzma_pEX'] = lambda d: lzma.compress(d, preset=lzma.PRESET_EXTREME)
+    funcs['lzma_fApEX'] = lambda d: lzma.compress(d, format=lzma.FORMAT_ALONE, preset=lzma.PRESET_EXTREME)
 
 except ImportError:
     pass
@@ -50,6 +51,12 @@ try:
 except ImportError:
     print("tamp module not available")
     pass
+
+
+import pyarrow
+import pyarrow.parquet as pq
+
+#pyarrow.compress()
 
 
 def compress_file_tamp(input_file, window=8, buf_size=128):
@@ -83,6 +90,7 @@ def decompress_file_tamp(input_file, out_file, buf_size=128, max_len=0):
 
 
 inp_file = '../dl/jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
+inp_file = '/Users/fab/l2exp/cc_l2_ftr/delta/C-BTC-56000-230224-2023-12-29T12:50:21Z~2024-02-21T03:23:41Z.msgpack'
 # inp_file = 'jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
 # inp_file = 'conn.py'
 compress_file_tamp(inp_file)
