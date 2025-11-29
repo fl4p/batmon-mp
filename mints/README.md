@@ -1,7 +1,7 @@
 # MinTS
 
 This is a time series storage for MicroPython on embedded systems (Arduino, Esp32, STM32 etc), with the primary
-intention of long term data logging. It will  work in ordinary (non-embedded) python environments too.
+intention of long term data logging. It will work in ordinary (non-embedded) python environments too.
 
 Querying data and indexing is currently not implemented and probably out of scope of this project.
 It rather expects the user to transfer the collected data from the embedded flash for further analysis
@@ -49,11 +49,11 @@ will handle the overflown time index and create a monotonic index. Just make sur
 Samples will be added row-wise to a fixed frame length file. Once that reaches a certain size, it compresses integers
 with delta, varint/VQL and zigzag coding an passes the buffer through `tamp` compression lib.
 float compression is possible, but not yet implemented (need to evaluate [vf128](https://github.com/michaeljclark/vf128)
-and μ-law coding for lossy floating point compression).
+and [μ-law](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) coding for lossy floating point compression).
 
-more examples in
+more examples in:
 
-* [test](test)
+* [test.py](test/test.py)
 * see https://github.com/fl4p/batmon-mp/blob/master/batmon.py
 
 ## Features
@@ -63,7 +63,7 @@ more examples in
 * sharding splits the storage file in multiple chunks (with compression)
 * uses common compression methods: delta, zigzag, varint and huffman ([tamp](https://github.com/BrianPugh/tamp/)
   provides the huffman code)
-* usual compression ratio is 20 % of (`len(compressed)/len(raw input)`)
+* usual compression ratio is 20 % of (`len(compressed)/len(raw_bytes_input)`)
 
 ## Usage Considerations
 
@@ -71,6 +71,8 @@ For minimum size usage consider these points:
 
 * Avoid `float16` and `float32` as these types currently don't benefit from delta and varint coding and poorly compress
 * Use integer types with pre-scaling to get a fixed decimal precision
+* When storing a value in the range [0-100] (e.g. battery percentage), you can multiply it by 2 and store it in `u8`.
+  this way you will get a 0.5% resolution.
 * Value changes between subsequent samples in the range [-64, 63] are encoded as a single byte
 * For time index use the `monotonic=True`. this disables zigzag coding and doubles the range of 1-byte coded numbers (up
   to 127)
