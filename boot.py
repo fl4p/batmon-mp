@@ -22,10 +22,10 @@ def connect_wifi():
 
 
 try:
-    asyncio.run(conn.main())
+    asyncio.run(batmon.main())
 except KeyboardInterrupt:
     print('boot:KeyboardInterrupt')
-    asyncio.run(conn.close())
+    asyncio.run(batmon.close())
 
 except Exception as e:
 
