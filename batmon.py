@@ -187,15 +187,20 @@ async def main() -> None:
                 temp_mean = sum(data['temp_values']) / (
                         len(data['temp_values']) + 1e-9)  # regularization to prevent `ZeroDivisionError:
 
+                volt = data['voltage']
+
                 show_idx = int(si) % 6 == 0 or int(si - 1) % 6 == 0
-                line0 = "%.0f%% %.0f\xDF%s%s%.0fA %.0fV" % (
-                    soc, temp_mean,
+                line0 = "%.0f%%" "%s%.0fW %s%s%.0fA %.0fV" % (
+                    soc,
                     ' ' if current >= +0 else '',
+                    current * volt,
+                    ' ' if current >= +0 else '-',
                     '.' if abs(current) < 0.95 else '',
-                    current if abs(current) >= 0.95 else (current * 10), data['voltage'])
-                line1 = "%4d %4d  %s" % (
+                    abs(current if abs(current) >= 0.95 else (current * 10)), volt)
+                line1 = "%4d %4d %.0f\xDF %s" % (
                     cell_min if not show_idx else cell_min_idx,
                     cell_max if not show_idx else cell_max_idx,
+                    temp_mean,
                     chr(sc[int(si / 5) % len(sc)]))
 
                 print(round(now), line0, line1,
