@@ -216,20 +216,22 @@ async def main() -> None:
                 def rel_err(a, b, reg=1e-3):
                     return abs(a - b) / (abs(b) + reg)
 
+                soc_d = 2 if max(soc, prev_soc) >= 99 else 1
                 # if current significantly changed
                 if (False
                         # or (abs(current_acc / current_acc_n - prev_current_mean) > DESIGN_CAP * 0.05) # this will let throug noise (daly)
                         # or (current_acc_n > 1 and rel_err(current_acc / current_acc_n, prev_current_mean) > 0.5)
-                        or (current_acc_n > 16 and rel_err(current_acc / current_acc_n, prev_current_mean) > 0.3)
-                        or int(round(soc)) != int(round(prev_soc))
-                        or rel_err(voltage, prev_voltage) > 0.004):  # 0.002
+                        or (current_acc_n > 16
+                            and abs(current_acc / current_acc_n - prev_current_mean) > DESIGN_CAP * 0.05)  # rel_err(current_acc / current_acc_n, prev_current_mean, reg=DESIGN_CAP * 0.05) > 0.3)
+                        or abs(soc - prev_soc) >= soc_d
+                        or rel_err(voltage, prev_voltage) > 0.005):  # 0.002
                     print('significant load or soc change current=', prev_current_mean, current_acc / current_acc_n,
                           'voltage=', prev_voltage, voltage, )
                     store_interval = 1  # store now
                 elif abs(current) > DESIGN_CAP * 0.05:
-                    store_interval = 16
-                elif abs(current) > 280 * 0.005:
-                    store_interval = 128
+                    store_interval = 64
+                elif abs(current) > DESIGN_CAP * 0.005:
+                    store_interval = 256
                 else:
                     store_interval = 1024
 
