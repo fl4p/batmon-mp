@@ -156,7 +156,7 @@ class BMS(BaseBMS):
     def _cmd(cmd: int, adr: int, value: int) -> bytes:
         """Assemble a ANT BMS command."""
         frame: bytearray = (
-            bytearray([*BMS._HEAD, cmd & 0xFF])
+            bytearray(BMS._HEAD + bytes([cmd & 0xFF]))
             + adr.to_bytes(2, "little")
             + int.to_bytes(value & 0xFF, 1)
         )
