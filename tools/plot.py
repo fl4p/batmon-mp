@@ -20,7 +20,7 @@ dat = Store.read_file_to_pandas(
     file_path
 )
 
-dat.index = pd.to_datetime(round(os.stat(file_path).st_mtime) + dat.index - dat.index[-1], unit='s')
+dat.index = pd.to_datetime(round(os.stat(file_path).st_mtime) + dat.index.values*10 - dat.index[-1]*10, unit='s')
 
 dat.voltage = dat.voltage / 100
 dat.current = dat.current / 100

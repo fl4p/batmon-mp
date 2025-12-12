@@ -1,3 +1,7 @@
+import sys
+
+sys.path.append("/remote/lib")
+
 import asyncio
 import logging
 import math
@@ -8,19 +12,21 @@ import time
 from lcd_i2c import LCD
 from machine import I2C, Pin
 
-from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
+# from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
+from aiobmsble.bms.ant_bms import BMS
 from bleak import BleakScanner
 from mints import Store, Col
 
-dev_name = "jk-pak01"  # # BMS name
-DESIGN_CAP = 24  # # battery design capacity
+# dev_name = "JKPferdestall"  # # BMS name
+dev_name = "ANT-BLE20PHUB"
+DESIGN_CAP = 280  # # battery design capacity
 
 # PCF8574 on 0x50
 I2C_ADDR = 0x27  # DEC 39, HEX 0x27
 NUM_ROWS = 2
 NUM_COLS = 16
 i2c = I2C(0, scl=Pin(2), sda=Pin(1), freq=800000)
-lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
+lcd: LCD = None
 store: Store | None = None
 
 # logging.basicConfig(level=logging.DEBUG)
@@ -52,9 +58,10 @@ def argmin(a):
 async def close():
     store and store.flush()
 
-    lcd.clear()
-    lcd.home()
-    lcd.print('Interrupt')
+    if lcd:
+        lcd.clear()
+        lcd.home()
+        lcd.print('Interrupt')
 
     if bms:
         print('disconnecting bms..')
@@ -66,35 +73,46 @@ bms: BMS | None = None
 
 async def connect_bms(tries=3):
     while True:
-        lcd.backlight()
-        lcd.set_cursor(col=0, row=1)
-        lcd.print("Connecting " + dev_name)
-        lcd.blink()
+        if lcd:
+            lcd.backlight()
+            lcd.set_cursor(col=0, row=1)
+            lcd.print("Connecting " + dev_name)
+            lcd.blink()
 
+        print('Finding BLE device', dev_name)
+        await asyncio.sleep(.2)
         device = await BleakScanner.find_device_by_name(dev_name)
+        print('found', device)
+        await asyncio.sleep(.2)
         if device is None:
             logger.error("Device '%s' not found.", dev_name)
-            lcd.set_cursor(col=0, row=1)
-            lcd.print('Device not found')
+            if lcd:
+                lcd.set_cursor(col=0, row=1)
+                lcd.print('Device not found')
             if tries == 0:
                 raise Exception("Connection timed out")
             await asyncio.sleep(10)
             tries -= 1
 
         else:
-            lcd.set_cursor(col=0, row=1)
-            lcd.print("Found " + dev_name + "    ")
+            if lcd:
+                lcd.set_cursor(col=0, row=1)
+                lcd.print("Found " + dev_name + "    ")
             logger.info("Found device: %s (%s)", device.name, device.address)
 
             return device
 
 
 async def main() -> None:
-    global bms, store
+    global bms, store, lcd
 
-    lcd.begin()
-    lcd.clear()
-    lcd.print("Hello World!")
+    try:
+        lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
+        lcd.begin()
+        lcd.clear()
+        lcd.print("Hello World!")
+    except:
+        lcd = None
 
     store = Store(dev_name, [
         Col('time', 'u16', monotonic=True),
@@ -109,6 +127,7 @@ async def main() -> None:
 
     while True:
         try:
+            print('connect_bms')
             device = await connect_bms(tries=3)
 
             bms = BMS(ble_device=device, keep_alive=True)
@@ -177,7 +196,7 @@ async def main() -> None:
                 if soc < 15 and current < -4:
                     set_backlight(not lcd_bl_state)  # blink low soc
                 else:
-                    set_backlight(current > 1 or current < -10 or now - t0 < 120)  # pos => charging
+                    set_backlight(True or current > 1 or current < -1 or now - t0 < 120)  # pos => charging
 
                 cell_min = min(cells) * 1000
                 cell_max = max(cells) * 1000
@@ -294,3 +313,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# import batmon; import asyncio; asyncio.run(batmon.main())
