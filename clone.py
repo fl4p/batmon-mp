@@ -1,4 +1,5 @@
 import asyncio
+import binascii
 import collections
 import sys
 
@@ -6,9 +7,9 @@ from bluetooth import UUID
 from micropython import const
 
 import aioble
+from aioble.central import ScanResult
 from aioble.client import ClientService, ClientCharacteristic
 from aioble.device import DeviceConnection, DeviceDisconnectedError
-from util import find_device
 
 # from typing import List, Tuple
 
@@ -27,19 +28,71 @@ write_chars: list[tuple[aioble.Characteristic, ClientCharacteristic]] = None
 scan_result = None
 
 
-def display_char(c: aioble.Characteristic):
+def display_char(c: aioble.Characteristic | aioble.client.ClientCharacteristic):
     flags = ('_FLAG_READ', '_FLAG_WRITE_NO_RESPONSE', '_FLAG_WRITE', '_FLAG_NOTIFY', '_FLAG_INDICATE')
     fs = ''
+    cf = c.flags if hasattr(c, 'flags') else c.properties
     for f in flags:
-        if c.flags & globals()[f]:
+        if cf & globals()[f]:
             fs += f[6:] + ','
     return f'<Characteristic({c.uuid},{c._value_handle},flags={fs})>'
 
 
+async def notify_loop(char: ClientCharacteristic, central_conn, central_char: aioble.Characteristic):
+    print('notify loop started', char)
+    await char.subscribe(notify=True, indicate=False)
+    buf = collections.deque((), 20)
+    while True:
+        try:
+            data = await char.notified(500)
+            buf.append(data)
+        except asyncio.TimeoutError:
+            if buf:
+                print('notification timeout, flush', len(buf))
+            while buf:
+                data = buf.popleft()
+                print('fwd notify data', central_char, len(data), data)
+                central_char.notify(central_conn, data)
+                await asyncio.sleep(.05)
+        except DeviceDisconnectedError:
+            break
+    print('notify loop ended.', char, 'central_conn=', central_conn.is_connected())
+
+
 async def data_forward_task(chars: list[tuple[aioble.Characteristic, ClientCharacteristic]],
                             central_conn: DeviceConnection, per_conn: DeviceConnection,
-                            poll_read=False
+                            poll_read=False,
+                            subscribe_all=True,
                             ):
+    if subscribe_all:
+        for c, p in chars:
+            if (p.properties & _FLAG_NOTIFY):
+                # print('subscribing', display_char(p))
+                asyncio.create_task(notify_loop(p, central_conn, c))
+
+    # await asyncio.sleep(1)
+
+    # await p.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
+
+    # svc = await per_conn.service(UUID(0xffe0))
+    # ch: aioble.client.ClientCharacteristic = await svc.characteristic(UUID(0xffe1))
+    # print('subscribe', display_char(ch))
+    # await ch.subscribe(notify=True, indicate=False)
+    # await ch.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
+    # n = await ch.notified(4000)
+    # print('notified1', n)
+
+    # if subscribe_all:
+    #    for c, p in chars:
+    #        if (c.flags & _FLAG_NOTIFY):  # or (c.flags & _FLAG_INDICATE):
+    #            print('subscribe', display_char(p))
+    # await p.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
+    #            await p.subscribe((c.flags & _FLAG_NOTIFY), indicate=(c.flags & _FLAG_INDICATE))
+    # print('chars', p, ch, id(p), id(ch))
+    #            await asyncio.sleep(.2)
+    #            await p.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
+    # n = await p.notified(4000)
+    # print('notified2', n, 'from', display_char(c))
     while True:
         if not per_conn.is_connected():
             print('connection to peripheral lost')
@@ -103,12 +156,12 @@ async def data_forward_task(chars: list[tuple[aioble.Characteristic, ClientChara
                     # client -> proxy -> device
                     v = s.read()
                     if v:
-                        print('read', v, 'from', display_char(s), 'writing', c, c._connection()._conn_handle,
-                              c._value_handle)
+                        print('read', v, 'from', display_char(s))
+                        print('  writing', v, 'to', c)
                         await c.write(v)
                         rw_queue.popleft()
 
-                if (s.flags & _FLAG_NOTIFY):
+                if False and (s.flags & _FLAG_NOTIFY):
                     # client <- proxy <- device (push)
                     try:
                         data = await c.notified(timeout_ms=20)
@@ -118,7 +171,7 @@ async def data_forward_task(chars: list[tuple[aioble.Characteristic, ClientChara
                     except asyncio.TimeoutError:
                         pass
 
-                if (s.flags & _FLAG_INDICATE):
+                if False and (s.flags & _FLAG_INDICATE):
                     # client <- proxy <- device (ACKed push)
                     try:
                         data = await c.indicated(timeout_ms=20)
@@ -130,7 +183,7 @@ async def data_forward_task(chars: list[tuple[aioble.Characteristic, ClientChara
         except DeviceDisconnectedError:  # client connection
             print('device disconnected')
             break
-        await asyncio.sleep(.01)
+        await asyncio.sleep(.2)
 
     print('data loop ended.')
     await central_conn.disconnect()
@@ -201,8 +254,27 @@ async def match_chars(per_conn, write_chars):
         write_chars[i] = clone_char, all_chars[clone_char.uuid]
 
 
+async def find_device(dev_name) -> ScanResult:
+    try:
+        addr = binascii.unhexlify(dev_name.replace(":", ""))
+    except:
+        addr = None
+
+    async with aioble.scan(5000, interval_us=30000, window_us=30000, active=True) as scanner:
+        async for result in scanner:
+            if result.name():
+                print('found ble device', result.device.addr, result.name(), result.rssi)
+            if result.name() == dev_name or (addr and result.device.addr == addr):
+                return result
+    print('ble device not found', dev_name)
+    return None
+
+
+# see https://github.com/micropython/micropython/blob/master/docs/library/bluetooth.rst
 _IRQ_GATTS_WRITE = const(3)
 _IRQ_GATTS_READ_REQUEST = const(4)
+_IRQ_SCAN_RESULT = const(5)
+_IRQ_CONNECTION_UPDATE = const(27)
 
 rw_queue = collections.deque((), 10)
 
@@ -222,8 +294,12 @@ def ble_irq(event, data):
         # Note: This event is not supported on ESP32.
         conn_handle, attr_handle = data
         print('read request', data)
+    # elif event == _IRQ_CONNECTION_UPDATE:
+    #    conn_handle, conn_interval, conn_latency, supervision_timeout, status =  data
     else:
-        print('irq event', event, data)
+        if event != _IRQ_SCAN_RESULT:
+            pass
+            # print('irq event', event, data)
 
 
 def ble_shutdown():
@@ -236,6 +312,8 @@ async def peripheral_task():
     # keep this globally so we can re-use them
     # since there is no aioble.unregister_services(...)
     global services, write_chars, scan_result
+
+    MTU = 500  # must be lower than (BLE_ATT_MTU_MAX=527)-3 = 524
 
     while True:
         # aioble.register_services() # clear?
@@ -256,19 +334,14 @@ async def peripheral_task():
             per_conn = await scan_result.device.connect()
             print('connected peripheral', scan_result.device.addr)
 
-            svc = await per_conn.service(UUID(0xffe0))
-            ch: aioble.ClientCharacteristic = await svc.characteristic(UUID(0xffe1))
-
-            r = (b'~\xa1\x01\x00\x00\xbe\x18U\xaaU', b'~\xa1\x02l\x02 X\xc4\xaaU')
-            # await ch.write(b'~\xa1\x02l\x02 X\xc4\xaaU', True)
-            # await asyncio.sleep(.2)
-            # await ch.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU', True)
-            # writing b'~\xa1\x02l\x02 X\xc4\xaaU'
-            # writing b'~\xa1\x01\x00\x00\xbe\x18U\xaaU'
-            await asyncio.sleep(1)
-            await ch.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
-            n = await ch.notified(4000)
-            print('notified', n)
+            # svc = await per_conn.service(UUID(0xffe0))
+            # ch: aioble.client.ClientCharacteristic = await svc.characteristic(UUID(0xffe1))
+            # print('subscribe', display_char(ch))
+            # await ch.subscribe(notify=True, indicate=False)
+            ## r =            (b'~\xa1\x01\x00\x00\xbe\x18U\xaaU', b'~\xa1\x02l\x02 X\xc4\xaaU')
+            # await ch.write(b'~\xa1\x01\x00\x00\xbe\x18U\xaaU')
+            # n = await ch.notified(4000)
+            # print('notified', n)
 
             services, write_chars = await clone_services(per_conn)
             await per_conn.disconnect()
@@ -293,6 +366,7 @@ async def peripheral_task():
             services=list(scan_result.services()),
         )
         print("Connection from", central_conn.device)
+        print('central MTU', await central_conn.exchange_mtu(MTU))
 
         try:
             print('connecting peripheral')
@@ -308,6 +382,9 @@ async def peripheral_task():
         global _per_conn, _central_conn
         _per_conn = per_conn
         _central_conn = central_conn
+
+        print('per MTU', await per_conn.exchange_mtu(MTU))
+        # await asyncio.sleep(.1)
 
         print('peripheral successfully connected, starting data pump')
 
