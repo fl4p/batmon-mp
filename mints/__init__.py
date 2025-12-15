@@ -15,7 +15,7 @@ TODO:
 """
 import os
 import struct
-from typing import BinaryIO
+# from typing import BinaryIO
 
 DTypes = dict(
     # https://docs.python.org/3/library/struct.html#format-characters
@@ -105,13 +105,18 @@ class Store:
         except OSError:
             self._fsize = 0
 
+    def get_shard_files(self):
+        files = os.listdir('.')
+        bn = self._fn[:-3]
+        return [f for f in files if f.startswith(bn) and f.endswith('.tamp')]
+
     def compress_data_file(self):
         # create a new compressed shard of the current data file
         fsize = os.stat(self._fn)[6]
         assert fsize >= 1024 * 16, "data file too small to compress " + str(fsize)
 
         # TODO start from the top as old shards might have been deleted
-        # instead of str(i) use the index, monotic, need to remeber it
+        # instead of str(i) use the index, monotic, need to remember it
         i = 0
         while file_exists(tamp_fn := self._fn[:-3] + '%02i.tamp' % i):
             i += 1

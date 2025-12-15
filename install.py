@@ -1,4 +1,4 @@
-from boot import connect_wifi
+from util import connect_wifi
 
 connect_wifi()
 

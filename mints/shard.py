@@ -70,6 +70,7 @@ class ShardStore:
         for i in range(len(cols)):
             col = cols[i]
             if not is_varint_type(col.dtype):
+                # TODO implement float mu-law coding (lossy fixed rtol)
                 n_written += write(pack_funcs[i](row[i]))  # ordinary pack
             else:
                 d = row[i] - row_prev[i]

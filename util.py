@@ -4,6 +4,7 @@ _FLAG_WRITE = (0x0008)
 _FLAG_NOTIFY = (0x0010)
 _FLAG_INDICATE = (0x0020)
 
+
 async def find_device(dev_name) -> 'ScanResult':
     import binascii
     import aioble
@@ -23,7 +24,7 @@ async def find_device(dev_name) -> 'ScanResult':
     return None
 
 
-def display_char(c): # 'aioble.Characteristic | aioble.client.ClientCharacteristic'
+def display_char(c):  # 'aioble.Characteristic | aioble.client.ClientCharacteristic'
     flags = ('_FLAG_READ', '_FLAG_WRITE_NO_RESPONSE', '_FLAG_WRITE', '_FLAG_NOTIFY', '_FLAG_INDICATE')
     fs = ''
     cf = c.flags if hasattr(c, 'flags') else c.properties
@@ -33,7 +34,7 @@ def display_char(c): # 'aioble.Characteristic | aioble.client.ClientCharacterist
     return f'<Characteristic({c.uuid},{c._value_handle},flags={fs})>'
 
 
-async def get_char(conn: DeviceConnection, char_id):
+async def get_char(conn: 'DeviceConnection', char_id):
     services = []
     service: ClientService
     # cannot use nested loops here (ValueError: Discovery in progress)
@@ -45,15 +46,43 @@ async def get_char(conn: DeviceConnection, char_id):
         async for char in service.characteristics():
             chars.append(char)
 
+
 def connect_wifi():
     import json
     import network
     sta_if = network.WLAN(network.WLAN.IF_STA)
     if not sta_if.isconnected():
         with open('wifi-secret.json', 'r') as f:
-            print('connecting to network...', json.load(f)[0])
+            arg = json.load(f)
+            print('connecting to network...', arg[0])
             sta_if.active(True)
-            sta_if.connect(*json.load(f))
+            sta_if.connect(*arg)
         while not sta_if.isconnected():
             pass
     print('network config:', sta_if.ipconfig('addr4'))
+
+
+class WriteBuffer:
+    def __init__(self, func, mtu):
+        self.func = func
+        self.buf = bytearray(mtu)
+        self.buf_pos = 0
+        self.mv = memoryview(self.buf)
+
+    async def write(self, data: memoryview | bytes | bytearray, flush=False):
+        mtu = len(self.buf)
+        n = len(data)
+        assert n <= mtu, ("chunking not implemented", n, mtu)
+        if n + self.buf_pos > mtu:
+            await self.flush()
+        # self.buf[self.buf_pos:self.buf_pos+n] = data
+        self.mv[self.buf_pos:self.buf_pos + n] = data
+        self.buf_pos += n
+        if flush:
+            await self.flush()
+
+    async def flush(self):
+        if self.buf_pos == 0:
+            return
+        await self.func(self.mv[:self.buf_pos])
+        self.buf_pos = 0
