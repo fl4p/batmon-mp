@@ -5,7 +5,14 @@ Includes HD44780 driver for live monitoring and a data logger that writes to the
 
 # Install
 
-If your board has wifi, copy `install.py` and run `import install.py` in the REPL.
+Install the MicroPython image on the microcontroller (using Thonny).
+
+If your board has wifi, copy `install.py`, create `wifi-secret.json`:
+```
+["<wifi network name>", "<wifi password>"]
+```
+
+and run `import install.py` in the REPL.
 If not, install the dependency using `mpremote mip ...`.
 You'll find the list in `install.sh`.
 
@@ -14,9 +21,10 @@ Then copy these files to your device:
 ```
 boot.py
 batmon.py
-store.py
-aiobmsble/*
-lib/enum/*
+mints/
+aiobmsble/
+bleak/
+lib/enum/
 ```
 
 Edit `batmon.py`:
@@ -74,6 +82,15 @@ https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/file-syst
 * for non-monotonic series, prior to varint apply zigZagcoding to delta values to move the sign to the end
 
 # Dev Notes
+
+## mpremote
+```
+# mount – mount the local directory on the remote device:
+$ mpremote mount [options] <local-dir>
+
+
+
+```
 
 ## micropython bugs
 

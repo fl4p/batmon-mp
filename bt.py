@@ -1,5 +1,6 @@
 import asyncio
 import os
+#import stat
 import sys
 from collections import deque
 
@@ -26,6 +27,7 @@ _IRQ_GATTS_READ_REQUEST = const(4)
 _IRQ_SCAN_RESULT = const(5)
 _IRQ_GATTC_NOTIFY = const(18)
 _IRQ_CONNECTION_UPDATE = const(27)
+_IRQ_GATTS_INDICATE_DONE = const(20)
 
 services: list = None
 
@@ -43,6 +45,7 @@ _ADV_APPEARANCE_CYCLING_POWER_SENSOR = const(1156)
 sense_service = aioble.Service(_ENV_SENSE_UUID)
 io_characteristic = aioble.BufferedCharacteristic(
     sense_service, _ENV_SENSE_IO_UUID, write=True, indicate=True, read=True,
+    max_len=500 - 3
 )
 aioble.register_services(sense_service)
 
@@ -77,22 +80,30 @@ register_notification_handler(io_characteristic, notification_handler)
 
 
 async def _write(data: memoryview):
-    print('write', bytes(data))
+    # print('write', len(data), bytes(data))
+    # print('write', len(data), ' '.join(map(lambda i:f"{hex(i)[2:]:0>{5-len(hex(i))}}", data )))
     return await io_characteristic.indicate(_client_conn, data, 1000)
 
 
-w_buf = WriteBuffer(_write, 500)
+w_buf = WriteBuffer(_write, 500 - 3)
 
 
 async def process_command(cmd: str):
     print('process_command', cmd)
     if cmd == 'list':
-        list_path = ''
+        list_path = '.'
         print("List:", list_path)
-        for name, size, typ in os.ilistdir(list_path):
-            is_dir = typ == 0x4000
+        for name in os.listdir(list_path):
+            fp = list_path + '/' + name
+            st = os.stat(fp)
+            print(fp, st)
+            # print(st)
+            is_dir = not (st[0] >> 15)
+            if is_dir:
+                continue
+            size = st[6]
             l = "{}:{}\n".format('D' if is_dir else size, name).encode('ascii')
-            print(name, typ, size, l)
+            # print(name, st, l)
             await w_buf.write(l)
             # io_characteristic.write(l, send_update=True)
         await w_buf.flush()
@@ -101,9 +112,9 @@ async def process_command(cmd: str):
 
     elif cmd.startswith('read '):
         fn = cmd[5:]
-        print('sending', fn)
+        print('sending', fn, os.stat(fn))
         with open(fn, "rb") as f:  # noqa: ASYNC230
-            buf = bytearray(_mtu)
+            buf = bytearray(_mtu - 3)
             mv = memoryview(buf)
             while n := f.readinto(buf):
                 await w_buf.write(mv[:n])
@@ -137,7 +148,7 @@ async def command_task():
 # Serially wait for connections. Don't advertise while a central is
 # connected.
 async def peripheral_task():
-    global _client_conn, _mtu
+    global _client_conn, _mtu, received_write
     MTU = 500
 
     # await process_command("list")
@@ -154,10 +165,12 @@ async def peripheral_task():
             _mtu = await connection.exchange_mtu(MTU)
             print('connection MTU', _mtu)
             _client_conn = connection
-            cmd_event.set()
+            received_write = False
+            # cmd_event.set()
             await connection.disconnected(timeout_ms=None)
             print('connection closed.')
             _client_conn = None
+            received_write = False
 
 
 received_write = False

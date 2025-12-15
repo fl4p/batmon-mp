@@ -10,7 +10,7 @@ aioble/
 *.bin3
 *.bin*
 
-host/aiobmsble/
+etc/host/aiobmsble/
 
 *.mpy
 
@@ -21,6 +21,11 @@ ble_secrets.json
 
 .DS_Store
 
-playground/
+etc/playground/
 
 test_main.dist/
+
+
+lib/**/
+lib/*.py
+mints_test

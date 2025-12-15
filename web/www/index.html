@@ -10,8 +10,10 @@
 
     <script type='module'>
         import {struct} from './struct.mjs'
+        import {crc16modbus} from './crc.mjs'
 
         window.struct = struct;
+        window.crc16modbus = crc16modbus;
     </script>
 
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/dygraphs@2.2.1/dist/dygraph.min.css"/>
@@ -26,6 +28,9 @@
 <h1>Hello</h1>
 
 <button onclick="connect()">Connect</button>
+<button onclick="updateFileView()">Refresh File List</button>
+
+<span id="progressView"></span>
 
 <pre id="fileView"></pre>
 
@@ -44,6 +49,10 @@
 
         function onDisconnected(event) {
             msg('Device ' + device.name + ' is disconnected.');
+            _sendCommandResolve = null;
+            _sendCommandReject = null;
+            fileView.innerHTML = '';
+
         }
 
         device.addEventListener('gattserverdisconnected', onDisconnected);
@@ -63,15 +72,24 @@
     }
 
     async function updateFileView() {
+        fileView.style.opacity = .5;
         const resp = await sendCommand("list");
-        console.log("list resp", new TextDecoder().decode(resp));
+        //console.log("list resp", new TextDecoder().decode(resp));
         fileView.innerHTML = (new TextDecoder().decode(resp)).split('\n')
             .map(f => `<a href="#" onclick="viewFile('${f}')">${f}</a>`).join('\n');
+        fileView.style.opacity = 1;
     }
 
+    var _expectedSize = 0;
+
     async function viewFile(file) {
-        const data = await sendCommand("read " + file.split(':')[1]);
-        console.log('viewFile', (new TextDecoder().decode(data)));
+        const [siz, fn] = file.split(':');
+        _expectedSize = +siz;
+        const t0 = Date.now();
+        const data = await sendCommand("read " + fn);
+        console.log('viewFile received', data.length, 'expected', +siz,
+            Math.round(data.byteLength / (Date.now() - t0)), 'kb/s');
+        await plotFile(fn, data);
         // tamp inflate, varint, zigzag, delta decode
     }
 
@@ -82,10 +100,10 @@
     function readRows(bytes, head, fmt) {
         s = window.struct(fmt);
         const rowSize = s.size;
-        console.assert(bytes.length % rowSize === 0);
         const numRows = (bytes.length / rowSize) | 0;
         const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
-
+        console.log(head, numRows, 'rows', rowSize, 'bytes/row')
+        console.assert(bytes.length % rowSize === 0);
         const converters = {
             time: x => (x * 10) * 1000,
             voltage: x => x / 100,
@@ -113,6 +131,10 @@
         }
 
         return columnData;
+    }
+
+    const toHex = (value) => {
+        return value.map(v => v.toString(16).padStart(2, '0')).join(' ');
     }
 
     /**
@@ -145,7 +167,7 @@
         const gs = [];
         for (let i = 1; i < columnData.length; i++) {
             const dyData = columnData[i].map((y, j) => [new Date(timeColumn[j] + tOff), y]);
-            console.log(head[i], 'dyData', dyData);
+            //console.log(head[i], 'dyData', dyData);
             const el = document.getElementById("plot-" + head[i]);
             gs.push(new Dygraph(
                 el,
@@ -173,8 +195,8 @@
 
         update = function update() {
             var zoom = 1 || document.getElementById('chk-zoom').checked,
-                selection =  1 || document.getElementById('chk-selection').checked,
-                syncRange =  1 || document.getElementById('chk-range').checked;
+                selection = 1 || document.getElementById('chk-selection').checked,
+                syncRange = 1 || document.getElementById('chk-range').checked;
             //document.getElementById('chk-range').disabled = !zoom;
 
             sync.detach();
@@ -189,19 +211,21 @@
     }
 
     var _sendCommandResolve = null, _sendCommandReject = null;
+    var _commandTimeout = null;
 
     function sendCommand(cmd, noResponse = false) {
         if (_sendCommandResolve != null)
             throw new Error('command in progress');
 
+        recvBuf.length = 0;
         ioChar.writeValue(new TextEncoder().encode(cmd));
         console.log('sent', cmd)
 
         if (!noResponse) {
             _sendCommandPromise = new Promise((resolve, reject) => {
-                recvBuf.length = 0;
                 _sendCommandResolve = resolve;
                 _sendCommandReject = reject;
+                _commandTimeout = setTimeout(() => reject(new Error('timeout')), 2000);
             });
             return _sendCommandPromise;
         }
@@ -216,19 +240,44 @@
         /** @type DataView */
         const val = event.target.value;
 
-        console.log('rx', "'" + (new TextDecoder().decode(val)) + "'");
+        //console.log('rx', "'" + (new TextDecoder().decode(val)) + "'");
+        //console.log('rx', val.byteLength, toHex([...new Uint8Array(val.buffer)]));
+
+        function rst() {
+            _sendCommandResolve = null;
+            _sendCommandReject = null;
+            if (_commandTimeout) clearTimeout(_commandTimeout);
+            _commandTimeout = null;
+            _expectedSize = 0;
+            progressView.innerHTML = '';
+        }
 
         if (_sendCommandResolve) {
-            recvBuf.push(val);
+            if (_expectedSize) {
+                const progress = Math.round(recvBuf.reduce((a, b) => a + b.byteLength, 0) / _expectedSize * 1000) / 10;
+                progressView.innerHTML = progress.toFixed(1) + ' %';
+                //console.log('progress', progress.toFixed(1));
+            }
+            if (_commandTimeout !== null) {
+                clearTimeout(_commandTimeout);
+                _commandTimeout = setTimeout(() => {
+                    _sendCommandReject(new Error('timeout'));
+                    rst();
+                }, 8000);
+            }
             if (val.byteLength === 1 && val.getInt8(0) === '\n'.charCodeAt(0)) {
                 const data = concatData(recvBuf);
                 recvBuf.length = 0;
-                console.log("command response", data);
-                //console.log(data)
-                //console.log('<< END')
-                _sendCommandResolve(data);
-                _sendCommandResolve = null;
-                _sendCommandReject = null;
+                const crc = crc16modbus(data);
+                console.log("command response", 'crc', crc, "'" + (new TextDecoder().decode(data)) + "'");
+                if (_expectedSize && _expectedSize != data.byteLength) {
+                    _sendCommandReject(new Error('rx size != expected size'));
+                } else {
+                    _sendCommandResolve(data);
+                }
+                rst();
+            } else {
+                recvBuf.push(val);
             }
         }
     }
@@ -236,7 +285,7 @@
     document.addEventListener('DOMContentLoaded',
         (async () => {
             const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
-            await plotFile(fn, await dlFile(fn));
+            //await plotFile(fn, await dlFile(fn));
         }));
 
 </script>
