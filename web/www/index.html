@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+
+    <script type="text/javascript" src="util.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/dygraphs@2.2.1/dist/dygraph.min.js"></script>
+    <script type="text/javascript" src="synchronizer.js"></script>
+
+    <script type='module'>
+        import {struct} from './struct.mjs'
+
+        window.struct = struct;
+    </script>
+
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/dygraphs@2.2.1/dist/dygraph.min.css"/>
+    <style>
+        .plot-view {
+            width: 100%;
+            margin-bottom: 2.2em;
+        }
+    </style>
+</head>
+<body>
+<h1>Hello</h1>
+
+<button onclick="connect()">Connect</button>
+
+<pre id="fileView"></pre>
+
+<div id="plotView"></div>
+
+<script>
+    function msg(m) {
+        console.log(m);
+    }
+
+    async function connect() {
+        //const device1 = await navigator.bluetooth.getDevices();
+        const device = await navigator.bluetooth.requestDevice({
+            filters: [{services: [0x5798]}]
+        });
+
+        function onDisconnected(event) {
+            msg('Device ' + device.name + ' is disconnected.');
+        }
+
+        device.addEventListener('gattserverdisconnected', onDisconnected);
+
+        const server = await device.gatt.connect();
+
+        msg('connected', device.name);
+
+        const service = await server.getPrimaryService(0x5798);
+
+        ioChar = await service.getCharacteristic(0xe8d7);
+        await ioChar.startNotifications();
+        ioChar.addEventListener('characteristicvaluechanged', onTransferStatusChanged);
+
+
+        await updateFileView();
+    }
+
+    async function updateFileView() {
+        const resp = await sendCommand("list");
+        console.log("list resp", new TextDecoder().decode(resp));
+        fileView.innerHTML = (new TextDecoder().decode(resp)).split('\n')
+            .map(f => `<a href="#" onclick="viewFile('${f}')">${f}</a>`).join('\n');
+    }
+
+    async function viewFile(file) {
+        const data = await sendCommand("read " + file.split(':')[1]);
+        console.log('viewFile', (new TextDecoder().decode(data)));
+        // tamp inflate, varint, zigzag, delta decode
+    }
+
+    async function dlFile(url) {
+        return await (await fetch(url)).bytes();
+    }
+
+    function readRows(bytes, head, fmt) {
+        s = window.struct(fmt);
+        const rowSize = s.size;
+        console.assert(bytes.length % rowSize === 0);
+        const numRows = (bytes.length / rowSize) | 0;
+        const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
+
+        const converters = {
+            time: x => (x * 10) * 1000,
+            voltage: x => x / 100,
+            current: x => x / 100,
+            soc2: x => x / 2,
+            temp2: x => x / 2 - 40,
+        }
+
+        let t = 0, tOff = 0;
+        for (let i = 0; i < numRows; i++) {
+            const row = s.unpack_from(bytes.buffer, i * rowSize);
+
+            // make overflowing time values monontonic
+            if (row[0] + tOff < t)
+                tOff = t - row[0] + 1
+            row[0] += tOff;
+            t = row[0];
+
+            for (let j = 0; j < head.length; j++) {
+                const conv = converters[head[j]];
+                let y = row[j];
+                if (conv) y = conv(y);
+                columnData[j][i] = y;
+            }
+        }
+
+        return columnData;
+    }
+
+    /**
+     * @param {string} fn
+     * @param {Uint8Array<ArrayBufferLike>} bytes
+     */
+    async function plotFile(fn, bytes) {
+        //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
+        const ext = fn.substring(fn.lastIndexOf('.'));
+        let [name, head, fmt] = fn.substring(0, fn.length - ext.length).split('-');
+        head = head.split(',')
+
+        const columnData = readRows(bytes, head, fmt);
+
+        console.log(columnData);
+
+        var data = [];
+        var t = new Date();
+        for (var i = 10; i >= 0; i--) {
+            var x = new Date(t.getTime() - i * 1000);
+            data.push([x, Math.random()]);
+        }
+
+        const timeColumn = columnData[0];
+        const tOff = Date.now() - timeColumn[timeColumn.length - 1];
+
+        document.getElementById("plotView").innerHTML = head
+            .map(h => `<div><div class="plot-view" id="plot-${h}"></div></div>`).join('');
+
+        const gs = [];
+        for (let i = 1; i < columnData.length; i++) {
+            const dyData = columnData[i].map((y, j) => [new Date(timeColumn[j] + tOff), y]);
+            console.log(head[i], 'dyData', dyData);
+            const el = document.getElementById("plot-" + head[i]);
+            gs.push(new Dygraph(
+                el,
+                dyData,
+                {
+                    //customBars: true,
+                    width: el.getBoundingClientRect().width - 25,
+                    title: head[i], // + ' ' + fmt[i],
+                    ylabel: head[i],
+                    //legend: 'always',
+                    showRangeSelector: true,
+                    drawPoints: true,
+                    //valueRange: [null, null],
+                }
+            ));
+            /*
+                            if row[0] + t_off < t:
+                    t_off = t - row[0] + 1
+                row[0] += t_off
+                t = row[0]
+             */
+        }
+
+        var sync = Dygraph.synchronize(gs);
+
+        update = function update() {
+            var zoom = 1 || document.getElementById('chk-zoom').checked,
+                selection =  1 || document.getElementById('chk-selection').checked,
+                syncRange =  1 || document.getElementById('chk-range').checked;
+            //document.getElementById('chk-range').disabled = !zoom;
+
+            sync.detach();
+            sync = Dygraph.synchronize(gs, {
+                zoom: false,
+                selection: 1,
+                range: false,
+            });
+        }
+
+
+    }
+
+    var _sendCommandResolve = null, _sendCommandReject = null;
+
+    function sendCommand(cmd, noResponse = false) {
+        if (_sendCommandResolve != null)
+            throw new Error('command in progress');
+
+        ioChar.writeValue(new TextEncoder().encode(cmd));
+        console.log('sent', cmd)
+
+        if (!noResponse) {
+            _sendCommandPromise = new Promise((resolve, reject) => {
+                recvBuf.length = 0;
+                _sendCommandResolve = resolve;
+                _sendCommandReject = reject;
+            });
+            return _sendCommandPromise;
+        }
+        return null;
+    }
+
+
+    recvBuf = []
+
+
+    function onTransferStatusChanged(event) {
+        /** @type DataView */
+        const val = event.target.value;
+
+        console.log('rx', "'" + (new TextDecoder().decode(val)) + "'");
+
+        if (_sendCommandResolve) {
+            recvBuf.push(val);
+            if (val.byteLength === 1 && val.getInt8(0) === '\n'.charCodeAt(0)) {
+                const data = concatData(recvBuf);
+                recvBuf.length = 0;
+                console.log("command response", data);
+                //console.log(data)
+                //console.log('<< END')
+                _sendCommandResolve(data);
+                _sendCommandResolve = null;
+                _sendCommandReject = null;
+            }
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded',
+        (async () => {
+            const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
+            await plotFile(fn, await dlFile(fn));
+        }));
+
+</script>
+
+</body>
+</html>
