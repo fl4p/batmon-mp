@@ -29,3 +29,5 @@ test_main.dist/
 lib/**/
 lib/*.py
 mints_test
+
+gauge.json

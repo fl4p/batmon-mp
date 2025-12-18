@@ -7,6 +7,10 @@ Includes HD44780 driver for live monitoring and a data logger that writes to the
 
 Install the MicroPython image on the microcontroller (using Thonny).
 
+```
+mpremote mount .
+```
+
 If your board has wifi, copy `install.py`, create `wifi-secret.json`:
 ```
 ["<wifi network name>", "<wifi password>"]
