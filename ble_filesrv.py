@@ -36,7 +36,6 @@ _ENV_SENSE_IO_UUID = bluetooth.UUID(0xe8d7)  # org.bluetooth.characteristic.temp
 _ADV_APPEARANCE_CYCLING_POWER_SENSOR = const(1156)
 
 
-
 class BleFileServer(BaseService):
     def __init__(self):
         BaseService.__init__(self)
@@ -48,7 +47,7 @@ class BleFileServer(BaseService):
         async def _write(data: memoryview):
             # print('write', len(data), bytes(data))
             # print('write', len(data), ' '.join(map(lambda i:f"{hex(i)[2:]:0>{5-len(hex(i))}}", data )))
-            return await self.io_char.indicate(_client_conn, data, 1000)
+            return await self.io_char.indicate(self._client_conn, data, 1000)
 
         self.w_buf = WriteBuffer(_write, 500 - 3)
 
@@ -62,14 +61,17 @@ class BleFileServer(BaseService):
         self._cmd_event = asyncio.ThreadSafeFlag()  # dont use asyncio.Event() here!
         self._received_write = False
 
+        print('BleFileServer registering irq handler')
         aioble.core.register_irq_handler(self.ble_irq, self.ble_shutdown)
+        print('Registering service', sense_service)
         aioble.register_services(sense_service)
+        print('registration complete.')
 
-    async def start(self, background, args):
+    async def start(self, background, args={}):
         self._closed = False
         asyncio.create_task(self._command_task())
 
-        pt = self._peripheral_task(args['advertising_name'])
+        pt = self._peripheral_task(args.get('advertising_name', None))
         if background:
             asyncio.create_task(pt)
         else:
@@ -78,7 +80,7 @@ class BleFileServer(BaseService):
     async def stop(self):
         self._closed = True
         if self._client_conn:
-            await _client_conn.disconnect()
+            await self._client_conn.disconnect()
 
     async def _command_task(self):
         while True:
@@ -86,7 +88,7 @@ class BleFileServer(BaseService):
             await self._cmd_event.wait()
             self._cmd_event.clear()
 
-            if received_write:
+            if self._received_write:
                 cmd = None
                 try:
                     cmd = str(self.io_char.read(), 'utf-8')
@@ -120,7 +122,7 @@ class BleFileServer(BaseService):
             fn = cmd[5:]
             print('sending', fn, os.stat(fn))
             with open(fn, "rb") as f:  # noqa: ASYNC230
-                buf = bytearray(_mtu - 3)
+                buf = bytearray(self._mtu - 3)
                 mv = memoryview(buf)
                 while n := f.readinto(buf):
                     await w_buf.write(mv[:n])
@@ -130,11 +132,10 @@ class BleFileServer(BaseService):
             print('unknown command', cmd)
 
     async def _peripheral_task(self, name):
-        global _client_conn, _mtu, received_write
         MTU = 500
 
         while True:
-            print('advertising')
+            print('advertising', name)
             async with await aioble.advertise(
                     _ADV_INTERVAL_US,
                     name=name,
@@ -142,15 +143,14 @@ class BleFileServer(BaseService):
                     appearance=_ADV_APPEARANCE_CYCLING_POWER_SENSOR,
             ) as connection:
                 print("Connection from", connection.device)
-                _mtu = await connection.exchange_mtu(MTU)
-                print('connection MTU', _mtu)
-                _client_conn = connection
-                received_write = False
-                # cmd_event.set()
+                self._mtu = await connection.exchange_mtu(MTU)
+                print('connection MTU', self._mtu)
+                self._client_conn = connection
+                self.received_write = False
                 await connection.disconnected(timeout_ms=None)
                 print('connection closed.')
-                _client_conn = None
-                received_write = False
+                self._client_conn = None
+                self.received_write = False
 
     def ble_irq(self, event, data):
         global received_write
@@ -163,16 +163,17 @@ class BleFileServer(BaseService):
         if event == _IRQ_GATTS_WRITE:
             # a write from a central (we are the device)
             conn_handle, attr_handle = data
-            received_write = True
-            cmd_event.set()
-            print('wrote to char', attr_handle)
+            if conn_handle == self._client_conn._conn_handle and attr_handle == self.io_char._value_handle:
+                self._received_write = True
+                cmd_event.set()
+                # print('wrote to char', attr_handle)
         elif event == _IRQ_GATTS_READ_REQUEST:
             # Note: This event is not supported on ESP32.
             conn_handle, attr_handle = data
             print('read request', attr_handle)
         elif event == _IRQ_GATTC_NOTIFY:
             conn_handle, value_handle, notify_data = data
-            print('notify event', conn_handle, value_handle, bytes(notify_data))
+            # print('notify event', conn_handle, value_handle, bytes(notify_data))
             # _notification_handlers[value_handle](conn_handle, notify_data)
             # chars_by_handle[value_handle].notify(_central_conn, notify_data)
         else:
@@ -184,7 +185,12 @@ class BleFileServer(BaseService):
         pass
 
 
-Service = BleFileServer
+service = BleFileServer
+
+if __name__ == '__main__':
+    # service = BleFileServer()
+    # service.start()
+    pass
 
 # TODO removed, notification handlers are only valid for centrals (not when acting as peripheral device)
 """
@@ -203,4 +209,3 @@ def notification_handler(conn_handle: int, notify_data: memoryview):
     cmd_event.set()
 register_notification_handler(io_characteristic, notification_handler)
 """
-

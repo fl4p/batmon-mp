@@ -20,7 +20,7 @@ def main():
 
     connect_wifi()
 
-    from web.micropyserver import MicroPyServer
+    from etc.web.micropyserver import MicroPyServer
 
     ''' there should be a wi-fi connection code here '''
 

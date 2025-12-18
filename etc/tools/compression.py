@@ -89,7 +89,7 @@ def decompress_file_tamp(input_file, out_file, buf_size=128, max_len=0):
     print('decompress ratio', round(os.stat(out_file)[6] / os.stat(input_file)[6], 2), 'took', round(t1 - t0, 2), 'sec')
 
 
-inp_file = '../dl/jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
+inp_file = '../../dl/jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
 inp_file = '/Users/fab/l2exp/cc_l2_ftr/delta/C-BTC-56000-230224-2023-12-29T12:50:21Z~2024-02-21T03:23:41Z.msgpack'
 # inp_file = 'jk-pak01-time,voltage,current,temp2,soc2,cell_min,cell_max-HeeBBHH.bin'
 # inp_file = 'conn.py'
