@@ -283,6 +283,20 @@ async def main() -> None:
             store.flush()
 
 
+class Batmon(BaseService):
+    def __init__(self):
+        super().__init__()
+
+    async def start(self, background: bool, args: dict):
+        assert not background, "background must be False"
+        await main()
+
+    async def stop(self):
+        await close()
+
+
+service = Batmon
+
 if __name__ == "__main__":
     asyncio.run(main())
 
