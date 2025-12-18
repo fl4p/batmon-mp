@@ -22,3 +22,21 @@ def test_writebuffer():
 
     asyncio.run(_prog())
 
+
+
+def test_hysteresis():
+    from util import BoolHysteresisVar
+    h = BoolHysteresisVar(False, 12, 17)
+    assert not h
+    h.update(10)
+    assert not h
+    h.update(13)
+    assert not h
+    h.update(18)
+    assert h
+    h.update(19)
+    assert h
+    h.update(13)
+    assert h
+    h.update(11)
+    assert not h

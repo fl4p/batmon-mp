@@ -86,3 +86,30 @@ class WriteBuffer:
             return
         await self.func(self.mv[:self.buf_pos])
         self.buf_pos = 0
+
+
+class BoolHysteresisVar:
+    def __init__(self, value, thres0, thres1):
+        self.value = value
+        self.thres0 = thres0
+        self.thres1 = thres1
+
+    def update(self, value):
+        if self.value:
+            if value < self.thres0:
+                self.value = 0
+                return True
+        else:
+            if value > self.thres1:
+                self.value = 1
+                return True
+        return False
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __invert__(self):
+        return not bool(self.value)
+
+    def __str__(self):
+        return str(self.value)
