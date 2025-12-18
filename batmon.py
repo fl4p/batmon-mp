@@ -1,4 +1,13 @@
+"""
+
+TODO:
+better capture peaks (in-rush motor)
+
+"""
 import sys
+
+from daq.downsample import Downsampler
+from service import BaseService
 
 sys.path.append("/remote/lib")
 
@@ -12,13 +21,18 @@ import time
 from lcd_i2c import LCD
 from machine import I2C, Pin
 
-# from aiobmsble.bms.jikong_bms import BMS  # adjust this import for your BMS
-from aiobmsble.bms.ant_bms import BMS
+#  # adjust this import for your BMS
+
 from bleak import BleakScanner
 from mints import Store, Col
 
-# dev_name = "JKPferdestall"  # # BMS name
-dev_name = "ANT-BLE20PHUB"
+from aiobmsble.bms.jikong_bms import BMS
+
+dev_name = "JKPferdestall"  # # BMS name
+
+# from aiobmsble.bms.ant_bms import BMS
+# dev_name = "ANT-BLE20PHUB"
+
 DESIGN_CAP = 280  # # battery design capacity
 
 # PCF8574 on 0x50
@@ -104,6 +118,7 @@ async def connect_bms(tries=3):
 
 
 async def main() -> None:
+    # import batmon; import asyncio; asyncio.run(batmon.main())
     global bms, store, lcd
 
     try:
@@ -155,11 +170,7 @@ async def main() -> None:
 
             si = 0.0
 
-            current_acc = 0
-            current_acc_n = 0
-            prev_current_mean = -9e9
-            prev_voltage = -1
-            prev_soc = -1
+            ds = Downsampler()
 
             data = await bms.async_update()
             cell_num = int(data['cell_count'])
@@ -211,64 +222,25 @@ async def main() -> None:
                 show_idx = int(si) % 6 == 0 or int(si - 1) % 6 == 0
                 line0 = "%.0f%%" "%s%.0fW %s%s%.0fA %.0fV" % (
                     soc,
-                    ' ' if current >= +0 else '',
-                    current * volt,
-                    ' ' if current >= +0 else '-',
-                    '.' if abs(current) < 0.95 else '',
+                    '+' if current >= +0 else '-', abs(current * volt),
+                    '+' if current >= +0 else '-', '.' if abs(current) < 0.95 else '',
                     abs(current if abs(current) >= 0.95 else (current * 10)), volt)
                 line1 = "%4d %4d %.0f\xDF %s" % (
                     cell_min if not show_idx else cell_min_idx,
                     cell_max if not show_idx else cell_max_idx,
-                    temp_mean,
-                    chr(sc[int(si / 5) % len(sc)]))
+                    temp_mean, chr(sc[int(si / 5) % len(sc)]))
 
                 print(round(now), line0, line1,
                       'soc=', soc,  # data.get("cycle_charge", 0) / data.get("design_capacity", 1) * 100
                       'I=', current)
 
-                current_acc += current
-                current_acc_n += 1
-
-                # TODO average current ewma
-                # - power jumps
-
-                def rel_err(a, b, reg=1e-3):
-                    return abs(a - b) / (abs(b) + reg)
-
-                soc_d = 2 if max(soc, prev_soc) >= 99 else 1
-                # if current significantly changed
-                if (False
-                        # or (abs(current_acc / current_acc_n - prev_current_mean) > DESIGN_CAP * 0.05) # this will let throug noise (daly)
-                        # or (current_acc_n > 1 and rel_err(current_acc / current_acc_n, prev_current_mean) > 0.5)
-                        or (current_acc_n > 16
-                            and abs(current_acc / current_acc_n - prev_current_mean) > DESIGN_CAP * 0.05)  # rel_err(current_acc / current_acc_n, prev_current_mean, reg=DESIGN_CAP * 0.05) > 0.3)
-                        or abs(soc - prev_soc) >= soc_d
-                        or rel_err(voltage, prev_voltage) > 0.005):  # 0.002
-                    print('significant load or soc change current=', prev_current_mean, current_acc / current_acc_n,
-                          'voltage=', prev_voltage, voltage, )
-                    store_interval = 1  # store now
-                elif abs(current) > DESIGN_CAP * 0.05:
-                    store_interval = 64
-                elif abs(current) > DESIGN_CAP * 0.005:
-                    store_interval = 256
-                else:
-                    store_interval = 1024
-
-                # store_interval //= 16
-
-                if current_acc_n >= store_interval:
-                    current_mean = current_acc / current_acc_n
-                    prev_current_mean = current_mean
-                    prev_soc = soc
-                    prev_voltage = voltage
-                    current_acc_n = 0
-                    current_acc = 0
+                if ds.update(soc=soc, current=current, voltage=voltage):
                     try:
-                        print('store point I=', current_mean)
+                        print('store point I=', ds.current_mean)
                         store.add_sample(dict(
                             time=int(math.ceil(now / 10)),  # ceil: prevents look-ahead
                             voltage=int(round(data['voltage'] * 100)),
-                            current=int(round(current_mean * 100)),
+                            current=int(round(ds.current_mean * 100)),
                             temp2=int(round((max(-40, temp_mean) + 40) * 2)),
                             soc2=int(round(data['battery_level'] * 2)),
                             cell_min=cell_min,
