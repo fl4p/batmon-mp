@@ -1,4 +1,14 @@
+import os
+
 from util import connect_wifi
+
+if 'bdev' in globals() and not isinstance(os.mount()[0][0], os.VfsLfs2):
+    print('formatting rootfs as littlefs')
+    os.umount('/')
+    os.VfsFat.mkfs(bdev)
+    os.mount(bdev, '/')
+else:
+    print('root partition filesystem is already littlefs')
 
 connect_wifi()
 
