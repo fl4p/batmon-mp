@@ -18,9 +18,56 @@
 
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/dygraphs@2.2.1/dist/dygraph.min.css"/>
     <style>
+        body {
+            background: #111;
+            color: #fff;
+        }
+
+
         .plot-view {
             width: 100%;
             margin-bottom: 2.2em;
+        }
+
+
+        /* Legend */
+        .dygraph-legend > span {
+            color: #fff;
+        }
+
+        /* Title: */
+        .dygraph-label, .dygraph-title {
+            color: #fff;
+        }
+
+        /* x-axis label: */
+        .dygraph-label, .dygraph-xlabel {
+            color: #fff;
+        }
+
+        /* y-axis label: */
+        .dygraph-label, .dygraph-ylabel {
+            color: #fff;
+        }
+
+        /* y2-axis label: */
+        .dygraph-label, .dygraph-y2label {
+            color: #fff;
+        }
+
+        /* x-axis label: */
+        .dygraph-axis-label, .dygraph-axis-label-x {
+            color: #fff;
+        }
+
+        /* y-axis label: */
+        .dygraph-axis-label, .dygraph-axis-label-y {
+            color: #fff;
+        }
+
+        /* y2-axis label */
+        .dygraph-axis-label, .dygraph-axis-label-y, .dygraph-axis-label-y2 {
+            color: #fff;
         }
     </style>
 </head>
@@ -94,13 +141,15 @@
     }
 
     async function dlFile(url) {
-        return await (await fetch(url)).bytes();
+        const resp = await fetch(url);
+        return [await resp.bytes(), new Date(resp.headers.get('Last-Modified'))];
     }
 
     function readRows(bytes, head, fmt) {
         s = window.struct(fmt);
         const rowSize = s.size;
         const numRows = (bytes.length / rowSize) | 0;
+        //const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
         const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
         console.log(head, numRows, 'rows', rowSize, 'bytes/row')
         console.assert(bytes.length % rowSize === 0);
@@ -112,15 +161,22 @@
             temp2: x => x / 2 - 40,
         }
 
-        let t = 0, tOff = 0;
+        let t = 0, tOff = 0, prevRow = null;
         for (let i = 0; i < numRows; i++) {
             const row = s.unpack_from(bytes.buffer, i * rowSize);
-
+            //  //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
             // make overflowing time values monontonic
             if (row[0] + tOff < t)
                 tOff = t - row[0] + 1
             row[0] += tOff;
             t = row[0];
+
+            if (prevRow && row[4] === 0) {
+                //console.log('skip', head, row);
+                //continue;
+                row[3] = prevRow[3]; // temp
+                row[4] = prevRow[4]; // soc
+            }
 
             for (let j = 0; j < head.length; j++) {
                 const conv = converters[head[j]];
@@ -128,6 +184,7 @@
                 if (conv) y = conv(y);
                 columnData[j][i] = y;
             }
+            prevRow = row;
         }
 
         return columnData;
@@ -137,11 +194,24 @@
         return value.map(v => v.toString(16).padStart(2, '0')).join(' ');
     }
 
+    function lowPass(x, len) {
+        console.assert(len % 2 === 0);
+        y = new Array(x.length);
+        for (let i = 0; i < x.length; i++) {
+            let s = 0;
+            for (let j = -len / 2; j < len / 2; j++) {
+                s += x[Math.max(0, Math.min(i + j, x.length - 1))];
+            }
+            y[i] = s / len;
+        }
+        return y;
+    }
+
     /**
      * @param {string} fn
      * @param {Uint8Array<ArrayBufferLike>} bytes
      */
-    async function plotFile(fn, bytes) {
+    async function plotFile(fn, bytes, lastModified) {
         //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
         const ext = fn.substring(fn.lastIndexOf('.'));
         let [name, head, fmt] = fn.substring(0, fn.length - ext.length).split('-');
@@ -151,22 +221,16 @@
 
         console.log(columnData);
 
-        var data = [];
-        var t = new Date();
-        for (var i = 10; i >= 0; i--) {
-            var x = new Date(t.getTime() - i * 1000);
-            data.push([x, Math.random()]);
-        }
-
         const timeColumn = columnData[0];
-        const tOff = Date.now() - timeColumn[timeColumn.length - 1];
+        const tOff = new Date(lastModified) - timeColumn[timeColumn.length - 1];
 
         document.getElementById("plotView").innerHTML = head
             .map(h => `<div><div class="plot-view" id="plot-${h}"></div></div>`).join('');
 
         const gs = [];
         for (let i = 1; i < columnData.length; i++) {
-            const dyData = columnData[i].map((y, j) => [new Date(timeColumn[j] + tOff), y]);
+            const dyData = lowPass(columnData[i], 8).map((y, j) => [new Date(timeColumn[j] + tOff), y]);
+            //const dyData = (columnData[i]).map((y, j) => [new Date(timeColumn[j] + tOff), y]);
             //console.log(head[i], 'dyData', dyData);
             const el = document.getElementById("plot-" + head[i]);
             gs.push(new Dygraph(
@@ -175,6 +239,8 @@
                 {
                     //customBars: true,
                     width: el.getBoundingClientRect().width - 25,
+                    height: 360,
+                    color: 'hsla(205, 71%, 49%, 1)',
                     title: head[i], // + ' ' + fmt[i],
                     ylabel: head[i],
                     //legend: 'always',
@@ -285,7 +351,7 @@
     document.addEventListener('DOMContentLoaded',
         (async () => {
             const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
-            //await plotFile(fn, await dlFile(fn));
+            await plotFile(fn, ...await dlFile(fn));
         }));
 
 </script>
