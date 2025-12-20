@@ -212,6 +212,7 @@
      * @param {Uint8Array<ArrayBufferLike>} bytes
      */
     async function plotFile(fn, bytes, lastModified) {
+        window.currentPlotFile = [fn, bytes, lastModified];
         //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
         const ext = fn.substring(fn.lastIndexOf('.'));
         let [name, head, fmt] = fn.substring(0, fn.length - ext.length).split('-');
@@ -354,7 +355,26 @@
             await plotFile(fn, ...await dlFile(fn));
         }));
 
+
+    function savePlotFile() {
+        if(!window.currentPlotFile) return;
+        const [filename, data, lastMod] = window.currentPlotFile;
+        const blob = new Blob([data], {type: 'application/octet-stream'});
+        if (window.navigator.msSaveOrOpenBlob) {
+            window.navigator.msSaveBlob(blob, filename);
+        } else {
+            const elem = window.document.createElement('a');
+            elem.href = window.URL.createObjectURL(blob);
+            elem.download = filename;
+            document.body.appendChild(elem);
+            elem.click();
+            document.body.removeChild(elem);
+        }
+    }
+
 </script>
+
+<button onclick="savePlotFile()">Download</button>
 
 </body>
 </html>
