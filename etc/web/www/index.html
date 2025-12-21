@@ -35,6 +35,10 @@
             color: #fff;
         }
 
+        .dygraph-legend {
+            background: none !important;
+        }
+
         /* Title: */
         .dygraph-label, .dygraph-title {
             color: #fff;
@@ -166,7 +170,12 @@
     }
 
     function readRows(bytes, head, fmt) {
-        s = window.struct(fmt);
+        try {
+            s = window.struct(fmt);
+        } catch (e) {
+            throw new Error(`error parsing struct '${fmt}': ${e}`)
+        }
+
         const len = (bytes.byteLength || bytes.length);
         const rowSize = s.size;
         const numRows = (len / rowSize) | 0;
@@ -239,6 +248,7 @@
         //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
         const ext = fn.substring(fn.lastIndexOf('.'));
         let [name, head, fmt] = fn.substring(0, fn.length - ext.length).split('-');
+        if (fmt.indexOf(' ') !== -1) fmt = fmt.substring(0, fmt.lastIndexOf(' '));
         head = head.split(',')
 
         const columnData = readRows(bytes, head, fmt);
