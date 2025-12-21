@@ -69,6 +69,12 @@
         .dygraph-axis-label, .dygraph-axis-label-y, .dygraph-axis-label-y2 {
             color: #fff;
         }
+
+        #errors .error-entry {
+            background-color: #ff4121;
+            margin-bottom: .2em;
+            padding: .2em .5em;
+        }
     </style>
 </head>
 <body>
@@ -83,10 +89,24 @@
 
 <div id="plotView"></div>
 
+<div id="errors">
+</div>
+
 <script>
     function msg(m) {
         console.log(m);
     }
+
+    window.onerror = function (msg, url, line, col, error) {
+        document.getElementById('errors').innerHTML += '<div class="error-entry">' + `${msg} ${url}:${line}:${col} ${error}` + '</div>';
+    }
+
+    addEventListener('unhandledrejection', event => {
+        ///** @type event PromiseR
+        console.error(event);
+        document.getElementById('errors').innerHTML += '<div class="error-entry">' + `${event.type} ${event.reason}` + '</div>';
+
+    });
 
     async function connect() {
         //const device1 = await navigator.bluetooth.getDevices();
@@ -136,7 +156,7 @@
         const data = await sendCommand("read " + fn);
         console.log('viewFile received', data.length, 'expected', +siz,
             Math.round(data.byteLength / (Date.now() - t0)), 'kb/s');
-        await plotFile(fn, data);
+        await plotFile(fn, data, Date.now());
         // tamp inflate, varint, zigzag, delta decode
     }
 
@@ -147,12 +167,13 @@
 
     function readRows(bytes, head, fmt) {
         s = window.struct(fmt);
+        const len = (bytes.byteLength || bytes.length);
         const rowSize = s.size;
-        const numRows = (bytes.length / rowSize) | 0;
+        const numRows = (len / rowSize) | 0;
         //const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
         const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
         console.log(head, numRows, 'rows', rowSize, 'bytes/row')
-        console.assert(bytes.length % rowSize === 0);
+        console.assert(len % rowSize === 0);
         const converters = {
             time: x => (x * 10) * 1000,
             voltage: x => x / 100,
@@ -163,7 +184,7 @@
 
         let t = 0, tOff = 0, prevRow = null;
         for (let i = 0; i < numRows; i++) {
-            const row = s.unpack_from(bytes.buffer, i * rowSize);
+            const row = s.unpack_from(bytes, i * rowSize);
             //  //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
             // make overflowing time values monontonic
             if (row[0] + tOff < t)
@@ -210,8 +231,10 @@
     /**
      * @param {string} fn
      * @param {Uint8Array<ArrayBufferLike>} bytes
+     * @param {Date} lastModified
      */
     async function plotFile(fn, bytes, lastModified) {
+        if (bytes.buffer) bytes = bytes.buffer;
         window.currentPlotFile = [fn, bytes, lastModified];
         //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
         const ext = fn.substring(fn.lastIndexOf('.'));
@@ -357,7 +380,7 @@
 
 
     function savePlotFile() {
-        if(!window.currentPlotFile) return;
+        if (!window.currentPlotFile) return;
         const [filename, data, lastMod] = window.currentPlotFile;
         const blob = new Blob([data], {type: 'application/octet-stream'});
         if (window.navigator.msSaveOrOpenBlob) {
@@ -372,9 +395,25 @@
         }
     }
 
+    function uploadFile(inputElement) {
+        const file = inputElement.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function ({target}) {
+            plotFile(file.name, target.result, file.lastModifiedDate || file.lastModified);
+            console.log(target.result);
+        }
+        reader.onerror = window.onerror;
+        reader.readAsArrayBuffer(file);
+    }
+
+
 </script>
 
 <button onclick="savePlotFile()">Download</button>
+
+<input type="file" onchange="uploadFile(this)"/>
 
 </body>
 </html>
