@@ -17,7 +17,7 @@ async def find_device(dev_name) -> 'ScanResult':
     async with aioble.scan(5000, interval_us=30000, window_us=30000, active=True) as scanner:
         async for result in scanner:
             if result.name():
-                print('found ble device', result.device.addr, result.name())
+                print('found ble device', result.device.addr, result.name(), result.rssi)
             if result.name() == dev_name or (addr and result.device.addr == addr):
                 return result
     print('ble device not found', dev_name)

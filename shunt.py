@@ -23,37 +23,51 @@ from util import BoolHysteresisVar
 
 # setup falling edge interrupt ALERT
 
-VOLT_EOC = 27.2
-VOLT_EMPTY = 24.7
+VOLT_EOC = 27.2 / 2
+VOLT_EMPTY = 24.7 / 2
 BAT_CAP = 280  # Ah
 BAT_ENERGY = 3.3 * 8 * 280  # Wh
 
 
+def find_i2c_pins():
+    for sda, scl, alert in (
+            (42, 38, 40),  # esp32s3, green bread board
+            # (21, 15, 19) # esp32, green broad board
+            (42, 2, 41),  # fugu2, bat shunt
+    ):
+        try:
+            sda = Pin(42, Pin.IN, Pin.PULL_DOWN)
+            scl = Pin(38, Pin.IN, Pin.PULL_DOWN)
+            assert sda.value(), "sda low (%s)" % sda
+            assert scl.value(), "scl low (%s)" % scl
+
+            i2c = I2C(0,
+                      sda=sda,
+                      scl=scl,  # cant use 22, see https://github.com/orgs/micropython/discussions/15507
+                      freq=400_000)
+            addr = i2c.scan()
+            assert len(addr) > 0, "no devices found"
+            print('i2c scan result:', addr)
+            return i2c
+        except Exception as e:
+            print('err with', 'sda', sda, 'scl', scl, 'alert', alert, e)
+            sys.print_exception(e)
+            continue
+    raise RuntimeError('no working i2c pins found')
+    return None
+
+
 async def main():
-    # alert = Pin(40) #  esp32:19, esp32s3:40 TODO
-    sda = Pin(42, Pin.IN, Pin.PULL_DOWN)  # 21(esp32) => 42(esp32s3)
-    scl = Pin(38, Pin.IN, Pin.PULL_DOWN)  # 15(esp32), esp32s3: 48
-
-    # sda.init(Pin.OUT,value=0)
-    # scl.init(Pin.OUT,value=0)
-
-    assert sda.value(), "sda low"
-    assert scl.value(), "scl low"
-    # assert alert.value(), "alert low"
-
-    i2c = I2C(0,
-              sda=sda,
-              scl=scl,  # cant use 22, see https://github.com/orgs/micropython/discussions/15507
-              freq=400_000)
-    print('i2c scan result:', i2c.scan())
+    i2c = find_i2c_pins()
 
     # (1.052*512)/20
     ina228.INA228_ADC_MODE = 0xF  # U,I,T
     ina228.INA228_VTCT_CONV_TIME = 0x01  # 84 µS
-    ina228.INA228_ADCRANGE = 1  # 0x1 - ±40.96 mV
+    #ina228.INA228_ADCRANGE = 1  # 0x1 -> ±40.96 mV
     ina228.INA228_ADC_AVG = 0x6  # => 512
 
-    ina = ina228.INA228(i2c, shunt_ohms=0.001)
+    ina = ina228.INA228(i2c)
+    ina.set_shunt_resistor(resistor=1e-3, range=10)
     ina.configure()
     ina.get_manufacturer_id()
     ina.get_deviceid()
@@ -111,6 +125,9 @@ async def main():
         alrt = ina.read_diag_alrt()
         # print('alrt diag', bin(alrt))
 
+        if ina228.DIAG_ALERT_FLAGS.MATHOF(alrt):
+            print('MATHOF')
+
         # TODO recover from overflow (40bit registers)
         if ina228.DIAG_ALERT_FLAGS.CHARGEOF(alrt):
             print('CHARGEOF')
@@ -128,6 +145,8 @@ async def main():
             q = ina.get_charge()
             tmp = ina.get_temp_voltage()
 
+            print('shunt voltage: %.3f mV' % (ina.get_shunt_voltage()*1e3,))
+
             dE = e - prev_e
             prev_e = e
 
@@ -142,7 +161,7 @@ async def main():
 
             bat_chg = bat_conn.update(u)
             if bat_chg:
-                print('  battery', 'connected' if bat_conn else 'disconnected', ' U=', round(u,2))
+                print('  battery', 'connected' if bat_conn else 'disconnected', ' U=', round(u, 2))
 
             if u > VOLT_EOC:
                 q_gauge = BAT_CAP
@@ -162,7 +181,7 @@ async def main():
 
             print(t, 'BatConn', bat_conn, 'n_empty=', n_empty,
                   'I=%.3fA U=%.2fV Ecnt=%.3fWh Qcnt=%.3fAh Egau=%.3fWh Qgau=%.3fAh SoC=%.2f%%' % (
-                      i, u, e/3600, q/3600, e_gauge/3600, q_gauge/3600, soc()))
+                      i, u, e / 3600, q / 3600, e_gauge / 3600, q_gauge / 3600, soc()))
 
             if ds.update(soc(), current=i, voltage=u):
                 print('store point I=', ds.current_mean)
@@ -199,5 +218,5 @@ class ShuntService(BaseService):
 
 service = ShuntService
 
-if __name__ == '__main__':
+if __name__ == '__main__' or True:
     asyncio.run(main())

@@ -36,9 +36,13 @@ def main():
 
         sys.print_exception(e)
 
-        print('reset in 2 seconds')
-        time.sleep(2)
+        print('reset in 5 seconds')
+        time.sleep(5)
         machine.reset()
+
+    print('main service', services[-1], 'stopped, reset in 10 seconds')
+    time.sleep(10)
+    machine.reset()
 
 
 if __name__ == '__main__':

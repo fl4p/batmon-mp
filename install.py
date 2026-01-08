@@ -8,7 +8,7 @@ if 'bdev' in globals() and not isinstance(os.mount()[0][0], os.VfsLfs2):
     os.VfsFat.mkfs(bdev)
     os.mount(bdev, '/')
 else:
-    print('root partition filesystem is already littlefs')
+    print('root partition filesystem is already littlefs', os.mount()[0][0])
 
 connect_wifi()
 
