@@ -18,7 +18,7 @@ except ImportError:
 # INA228 Address
 INA228_PORT = 1
 INA228_ADDRESS = 0x40
-INA228_SHUNT_OHMS = 0.015
+# INA228_SHUNT_OHMS = 0.015
 INA228_SHUNT_TEMPCO_VALUE = 0
 
 #############################################################
@@ -58,7 +58,7 @@ INA228_TEMPCOMP_NBIT = 5
 # 0x0 - ±163.84 mV (default)
 # 0x1 - ±40.96 mV
 #############################################################
-INA228_ADCRANGE = 0
+# INA228_ADCRANGE = 0
 INA228_ADCRANGE_NBIT = 4
 
 #############################################################
@@ -173,10 +173,21 @@ INA228_ALERT_SLOWALERT = 13
 INA228_ALERT_CNVR = 14
 INA228_ALERT_ALATCH = 15
 
+
 class DIAG_ALERT_FLAGS:
     CNVRF = lambda raw: (raw & 0x2)
-    CHARGEOF = lambda raw: (raw & 1<<10)
-    ENERGYOF = lambda raw: (raw & 1<<11)
+    ENERGYOF = lambda raw: (raw & 1 << 11)
+    CHARGEOF = lambda raw: (raw & 1 << 10)
+    MATHOF = lambda raw: (raw & 1 << 9)
+
+
+def shunt_cal(current_lsb, resistor, lv_adcrange):
+    assert current_lsb > 0 and resistor > 0, (current_lsb, resistor)
+    assert lv_adcrange is not None and int(lv_adcrange) in {0, 1}
+    shuntCal = 13107.2e6 * current_lsb * resistor
+    if lv_adcrange:
+        shuntCal *= 4
+    return int(round(shuntCal))
 
 
 class INA228:
@@ -201,11 +212,31 @@ class INA228:
     __INA228_MANUFACTURER_ID = 0x3E
     __INA228_DEVICE_ID = 0x3F
 
-    def __init__(self, i2c=None, address=INA228_ADDRESS, shunt_ohms=INA228_SHUNT_OHMS):
+    def __init__(self, i2c=None, address=INA228_ADDRESS):
 
         self._address = address
         self._i2c = i2c
-        self._shunt_ohms = shunt_ohms
+        self._shunt_ohms = 0
+        self._current_lsb = 0
+        self._adc_lv_range = None
+
+    def set_shunt_resistor(self, resistor, range):
+        self._shunt_ohms = resistor
+        maxExpectedVoltage = resistor * range
+        assert maxExpectedVoltage < 161e-3
+        self._adc_lv_range = (maxExpectedVoltage <= 40.96e-3)
+
+        current_LSB = range / 2 ** 19
+        self._current_lsb = shunt_cal(current_LSB, resistor, self._adc_lv_range) / 13107.2e6 / resistor
+        print('shunt cal', shunt_cal(self._current_lsb, resistor, self._adc_lv_range), 'LSB', self._current_lsb,
+              'adcRange LV', self._adc_lv_range)
+
+        self.write_shunt_calib()
+
+    def write_shunt_calib(self):
+        calib = shunt_cal(self._current_lsb, self._shunt_ohms, self._adc_lv_range)
+        print('shunt calib', calib)
+        self.write_register16(self.__INA228_SHUNT_CAL, calib)
 
     @staticmethod
     def _convert2comp2float(twocompdata, nrofbit, factor):
@@ -246,21 +277,6 @@ class INA228:
         self._i2c.writeto_mem(self._address, register, register_bytes)
         # self._i2c.write_word_data(self._address, register, register_value)
 
-    def get_current_lsb(self):
-        if (INA228_ADCRANGE == 0):
-            temp = 163.84e-3
-        else:
-            temp = 40.96e-3
-        current_lsb = (temp / INA228_SHUNT_OHMS) / 524288
-        return current_lsb
-
-    def get_shunt_conv_factor(self):
-        if (INA228_ADCRANGE == 0):
-            shunt_conv_factor = 1.25e-6
-        else:
-            shunt_conv_factor = 5.0e-6
-        return shunt_conv_factor
-
     def reset_all(self):
         config = self.read_register16(self.__INA228_CONFIG)
         data = 1 << INA228_RST_NBIT
@@ -274,25 +290,22 @@ class INA228:
         config = config | data
         self.write_register16(self.__INA228_CONFIG, config)
 
-    def set_config(self):
-        # Write settings to CONFIG register
-        config = self.read_register16(self.__INA228_CONFIG)
-        config = config | (INA228_CONVERSION_DELAY << INA228_CONVDLY_NBIT) | (
-                    INA228_TEMP_COMP << INA228_TEMPCOMP_NBIT) | (INA228_ADCRANGE << INA228_ADCRANGE_NBIT)
+    def write_config(self):
+        # adc config register
+        assert self._shunt_ohms and self._current_lsb and self._adc_lv_range is not None
+        config = ((INA228_CONVERSION_DELAY << INA228_CONVDLY_NBIT)
+                  | (INA228_TEMP_COMP << INA228_TEMPCOMP_NBIT)
+                  | int(self._adc_lv_range) << INA228_ADCRANGE_NBIT)
         self.write_register16(self.__INA228_CONFIG, config)
 
-    def set_adc_config(self):
+    def write_adc_config(self):
         # Write settings to ADC CONFIG register
-        config = self.read_register16(self.__INA228_ADC_CONFIG)
-        config = config | (INA228_ADC_MODE << INA228_ADC_MODE_NBIT) | (
-                    INA228_VBUS_CONV_TIME << INA228_VBUS_CONV_TIME_NBIT) | (
-                             INA228_VSHCT_CONV_TIME << INA228_VSHCT_CONV_TIME_NBIT) | (
-                             INA228_VTCT_CONV_TIME << INA228_VTCT_CONV_TIME_NBIT) | (INA228_ADC_AVG << INA228_AVG_NBIT)
+        # config = self.read_register16(self.__INA228_ADC_CONFIG)
+        config = (INA228_ADC_MODE << INA228_ADC_MODE_NBIT) | (
+                INA228_VBUS_CONV_TIME << INA228_VBUS_CONV_TIME_NBIT) | (
+                         INA228_VSHCT_CONV_TIME << INA228_VSHCT_CONV_TIME_NBIT) | (
+                         INA228_VTCT_CONV_TIME << INA228_VTCT_CONV_TIME_NBIT) | (INA228_ADC_AVG << INA228_AVG_NBIT)
         self.write_register16(self.__INA228_ADC_CONFIG, config)
-
-    def shunt_calib(self):
-        calib_value = int(13107.2e6 * self.get_current_lsb() * INA228_SHUNT_OHMS)
-        self.write_register16(self.__INA228_SHUNT_CAL, calib_value)
 
     def shunt_tempco(self):
         self.write_register16(self.__INA228_SHUNT_TEMPCO, INA228_SHUNT_TEMPCO_VALUE)
@@ -300,26 +313,31 @@ class INA228:
     def configure(self):
 
         self.reset_all()
-        time.sleep(0.1)
-        self.set_config()
-        time.sleep(0.1)
-        self.set_adc_config()
-        time.sleep(0.1)
-        self.shunt_calib()
-        time.sleep(0.1)
-        self.shunt_tempco()
-        time.sleep(0.1)
+        time.sleep(0.01)
+
+        self.write_config()
+        time.sleep(0.01)
+
+        self.write_adc_config()
+        time.sleep(0.01)
+
+        self.write_shunt_calib()
+        time.sleep(0.01)
+
+        if INA228_SHUNT_TEMPCO_VALUE:
+            self.shunt_tempco()
+            time.sleep(0.01)
 
     def get_shunt_voltage(self):
-
-        if (INA228_ADCRANGE == 1):
+        assert self._adc_lv_range is not None
+        if not self._adc_lv_range:
+            # 163.84mV
             conversion_factor = 312.5e-9  # nV/LSB
         else:
+            # 40.96mV
             conversion_factor = 78.125e-9  # nV/LSB
-
         raw = self.read_register24(self.__INA228_VSHUNT)
-        vshunt = (self._convert2comp2float(raw >> 4, 20, conversion_factor)) * 10  # Find and fix *10
-        # print('Shunt voltage: ', vshunt)
+        vshunt = (self._convert2comp2float(raw >> 4, 20, conversion_factor))
         return vshunt
 
     def get_vbus_voltage(self):
@@ -334,41 +352,38 @@ class INA228:
         conversion_factor = 7.8125e-3
         raw = self.read_register16(self.__INA228_DIETEMP)
         temp = self._convert2comp2float(raw, 16, conversion_factor)
-        #print('Die temp: ', temp)
+        # print('Die temp: ', temp)
         return temp
 
     def get_current(self):
         raw = self.read_register24(self.__INA228_CURRENT)
-        current = self._convert2comp2float(raw >> 4, 20, self.get_current_lsb())
-        #print('Current: ', current)
+        current = self._convert2comp2float(raw >> 4, 20, self._current_lsb)
         return current
 
     def get_power(self):
-        current_lsb = self.get_current_lsb()
         raw = self.read_register24(self.__INA228_POWER)
-        power = (3.2 * raw * current_lsb)
-        #print('Power: ', power)
+        power = (3.2 * raw * self._current_lsb)
+        # print('Power: ', power)
         return power
 
     def get_energy(self):
         raw = self.read_register40(self.__INA228_ENERGY)
-        energy = raw * 3.2 * 16 * self.get_current_lsb()
-        #print('Energy: ', energy)
+        energy = raw * 3.2 * 16 * self._current_lsb
+        # print('Energy: ', energy)
         return energy
 
     def get_charge(self):
         # Coulomb [C]
         raw = self.read_register40(self.__INA228_CHARGE)
-        q = self._convert2comp2float(raw, 40, self.get_current_lsb())
+        q = self._convert2comp2float(raw, 40, self._current_lsb)
         return q
 
     def read_diag_alrt(self):
         return self.read_register16(self.__INA228_DIAG_ALRT)
 
-
     def read_conv_ready_flag(self):
         raw = self.read_register16(self.__INA228_DIAG_ALRT)
-        return  (raw & 0x2) == 0x1
+        return (raw & 0x2) == 0x1
 
     def get_diag_alerts(self, alert):
         raw = self.read_register16(self.__INA228_DIAG_ALRT)
@@ -440,10 +455,10 @@ class INA228:
 
     def set_shunt_overvoltage(self, value):
         if (value >= 0):
-            data = (value * INA228_SHUNT_OHMS) / self.get_shunt_conv_factor()
+            data = (value * self._shunt_ohms) / self.get_shunt_conv_factor()
         else:
-            value_temp = value * (-1);
-            data = (value_temp * INA228_SHUNT_OHMS) / self.get_shunt_conv_factor()
+            value_temp = value * (-1)
+            data = (value_temp * self._shunt_ohms) / self.get_shunt_conv_factor()
             data = ~data
             data = data + 1
 
@@ -452,10 +467,10 @@ class INA228:
 
     def set_shunt_undervoltage(self, value):
         if (value >= 0):
-            data = (value * INA228_SHUNT_OHMS) / self.get_shunt_conv_factor()
+            data = (value * self._shunt_ohms) / self.get_shunt_conv_factor()
         else:
-            value_temp = value * (-1);
-            data = (value_temp * INA228_SHUNT_OHMS) / self.get_shunt_conv_factor()
+            value_temp = value * (-1)
+            data = (value_temp * self._shunt_ohms) / self.get_shunt_conv_factor()
             data = ~data
             data = data + 1
 
@@ -495,6 +510,11 @@ class INA228:
         print('Revision: ', hex(raw_id & 0xF))
 
 
-def tests():
+def _tests():
     r = INA228._convert2comp2float(1132462080, 40, 19.073486e-6)
     print(r)
+
+
+if __name__ == '__main__':
+    ina = INA228()
+    ina.set_shunt_resistor(resistor=1e-3, range=100)
