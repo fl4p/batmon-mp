@@ -10,12 +10,16 @@ This project basically consists of 4 standalone programs:
 * INA228 battery monitor (`shunt.py`)
     * high precision 20-bit battery monitor (current & voltage)
     * SoC gauge
-* BLE device repeating  (`clone.py`)
-    * extent Bluetooth range by "repeating" a device
+* BLE device repeater  (`clone.py`)
+    * extent Bluetooth range by "repeating" / "cloning" a device
+    * supports GATT writes (central→peripheral) and notifications (peripheral→central)
 * BMS Data logger (`batmon.py`)
+    * uses a port of `aiobmsble` to connect to various BMS over BLE
+    * displays battery data on HD44780 LCD
     * stores highly compressed data to flash memory
 * BLE file server (`ble_filesrv.py`)
     * download and view history in your Browser (Android, Windows, Linux, macOS)
+    * [web app](https://fl4p.github.io/batmon-mp/etc/web/www/)
 
 # Install
 
