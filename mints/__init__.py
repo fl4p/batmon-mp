@@ -185,11 +185,23 @@ class Store:
                 v = col.default_val
             t = col.dtype[0]
             if t == 'i' or t == 'u':
-                assert t == 'i' or v >= 0
                 if not isinstance(v, int):
                     if v != v:  # type-safe nan check
                         v = col.default_val
                     v = int(v)
+                # Clamp to the column's integer range so struct.pack can never
+                # overflow. Out-of-range raises struct.error on CPython but
+                # silently wraps (corrupting the value) on MicroPython, so the
+                # store must guard it rather than relying on the producer.
+                bits = int(col.dtype[1:])
+                if t == 'u':
+                    lo, hi = 0, (1 << bits) - 1
+                else:
+                    lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+                if v < lo:
+                    v = lo
+                elif v > hi:
+                    v = hi
             return v
 
         vals = (_ensure_dtype(row.get(col.name), col) for col in self.columns)
