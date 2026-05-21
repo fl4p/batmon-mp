@@ -177,7 +177,7 @@ async def main() -> None:
 
             si = 0.0
 
-            ds = Downsampler()
+            ds = Downsampler(design_cap=DESIGN_CAP)
 
             data = await bms.async_update()
             cell_num = int(data['cell_count'])
