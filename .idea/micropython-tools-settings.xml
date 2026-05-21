@@ -3,8 +3,9 @@
   <component name="MicroPythonTools">
     <option name="autoClearRepl" value="false" />
     <option name="filterManufacturers" value="false" />
+    <option name="lastShownVersion" value="2025.3.3" />
     <option name="pluginEnabled" value="true" />
-    <option name="portName" value="/dev/cu.usbserial-2120" />
+    <option name="portName" value="/dev/cu.usbmodem101" />
     <option name="showUploadPreviewDialog" value="false" />
   </component>
 </project>

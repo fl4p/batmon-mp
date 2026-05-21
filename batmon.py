@@ -17,7 +17,8 @@ import math
 import random
 import time
 
-# noinspection PyUnresolvedReferences
+#- noinspection PyUnresolvedReferences
+
 from lcd_i2c import LCD
 from machine import I2C, Pin
 
@@ -116,6 +117,10 @@ async def connect_bms(tries=3):
 
             return device
 
+def reset_lcd():
+    if lcd:
+        lcd.begin()
+
 
 async def main() -> None:
     # import batmon; import asyncio; asyncio.run(batmon.main())
@@ -149,19 +154,21 @@ async def main() -> None:
             await bms._connect()
             print('connected bms!')
 
-            lcd.set_cursor(col=0, row=1)
-            lcd.print("Connected!")
-            lcd.no_blink()
-            lcd.no_cursor()
-            lcd.home()
-            lcd.backlight()
             lcd_bl_state = True
+            if lcd:
+                reset_lcd()
+                lcd.set_cursor(col=0, row=1)
+                lcd.print("Connected!")
+                lcd.no_blink()
+                lcd.no_cursor()
+                lcd.home()
+                lcd.backlight()
 
             t0 = time.time()
 
             def set_backlight(on):
                 nonlocal lcd_bl_state
-                if on == lcd_bl_state: return
+                if not lcd or on == lcd_bl_state: return
                 lcd.backlight() if on else lcd.no_backlight()
                 lcd_bl_state = on
 
@@ -262,23 +269,40 @@ async def main() -> None:
                 #                         dict(device=dev_name, cell_index=ci),
                 #                         dict(voltage=int(round(cells[ci] * 1000))))
 
-                lcd.clear()
-                lcd.print(line0)
-                lcd.set_cursor(col=0, row=1)
-                lcd.print(line1)
-                lcd.home()
+                # TODO periodically reset_lcd()
+
+                if lcd:
+                    lcd.clear()
+                    lcd.print(line0)
+                    lcd.set_cursor(col=0, row=1)
+                    lcd.print(line1)
+                    lcd.home()
 
                 await asyncio.sleep(2)
                 si += random.random() * 2
             await bms.disconnect()
-        except KeyboardInterrupt as ex:
+        except Exception as ex:
+            # KeyboardInterrupt is a BaseException, so it is NOT caught here and
+            # propagates up to boot.py for a graceful service stop. Every other
+            # error (BLE/GATT failures, timeouts, missing data keys, asserts) is
+            # logged and we fall through to `while True` to reconnect, instead of
+            # escaping main() and triggering machine.reset().
             logger.error("Exception occurred: %s", ex)
+            sys.print_exception(ex)
 
-            lcd.clear()
-            lcd.home()
-            lcd.print("err: %s" % ex)
-            await asyncio.sleep(30)
-            # break
+            if lcd:
+                lcd.clear()
+                lcd.home()
+                lcd.print("err: %s" % ex)
+
+            if bms:
+                try:
+                    await bms.disconnect()
+                except Exception as de:
+                    print('error disconnecting bms during recovery', de)
+
+            await asyncio.sleep(10)
+            # loop back and reconnect
         finally:
             store.flush()
 
