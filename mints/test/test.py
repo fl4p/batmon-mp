@@ -1,9 +1,10 @@
+import errno
 import math
 import os
 import random
 import struct
 
-from .. import Store, Col
+from .. import Store, Col, file_exists
 from ..coding import ZigZagEncode, ZigZagDecode, SignedVarintEncode, SignedVarintDecode
 from ..shard import ShardStoreReader, ShardStore
 
@@ -170,6 +171,31 @@ def test_compress_file():
     os.unlink('_test_compress_file.bin')
     os.unlink('_test_compress_file.bin.tamp')
     os.unlink('_test_compress_file.bin2')
+
+
+def test_shard_prune_helpers():
+    import glob
+    store = Store('ptest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+    prefix = store._fn[:-3]  # 'ptest-time,v-HH.'
+    # shards with a gap (no 09..99) and across the 99->100 filename-width boundary
+    for i in (8, 100):
+        with open(prefix + '%02i.tamp' % i, 'wb') as f:
+            f.write(b'\x00')
+    try:
+        assert store._shard_index(prefix + '08.tamp') == 8
+        assert store._shard_index(prefix + '100.tamp') == 100
+        # next index ignores gaps and uses the numeric max, not lexical
+        assert store._next_shard_index() == 101
+        # prune removes the numeric minimum (08), not lexical ('100' < '08')
+        assert store._prune_oldest_shard() is True
+        assert not file_exists(prefix + '08.tamp')
+        assert file_exists(prefix + '100.tamp')
+        assert store._prune_oldest_shard() is True   # removes 100
+        assert store._prune_oldest_shard() is False  # nothing left
+        assert store._next_shard_index() == 0
+    finally:
+        for fn in glob.glob('ptest-*'):
+            os.unlink(fn)
 
 
 def assert_array_equal(a, b):

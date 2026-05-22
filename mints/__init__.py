@@ -33,6 +33,7 @@ COMPRESSION INVESTIGATION (done, 2026-05, on JKPferdestall sample, 6449 rows):
   fights the downsampler's purpose -- a product decision, not a compression one.
 
 """
+import errno
 import os
 import struct
 # from typing import BinaryIO
@@ -129,6 +130,27 @@ class Store:
         files = os.listdir('.')
         bn = self._fn[:-3]
         return [f for f in files if f.startswith(bn) and f.endswith('.tamp')]
+
+    def _shard_index(self, fn):
+        # fn is '{prefix}NN.tamp' where prefix == self._fn[:-3]; NN parsed numerically
+        bn = self._fn[:-3]
+        return int(fn[len(bn):-len('.tamp')])
+
+    def _next_shard_index(self):
+        shards = self.get_shard_files()
+        if not shards:
+            return 0
+        return max(self._shard_index(f) for f in shards) + 1
+
+    def _prune_oldest_shard(self):
+        # delete the lowest-index .tamp shard; return False if there are none
+        shards = self.get_shard_files()
+        if not shards:
+            return False
+        oldest = min(shards, key=self._shard_index)
+        print('store pruning oldest shard', oldest)
+        os.unlink(oldest)
+        return True
 
     def compress_data_file(self):
         # create a new compressed shard of the current data file
