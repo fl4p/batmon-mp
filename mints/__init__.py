@@ -1,7 +1,6 @@
 """
 
 TODO:
-- delete old shards if disk is full (notice by OSError)
 - fix sharding (see below)
 - use delta-coding or delta-delta-coding + zig-zag
 - use variable length integer coding (varints)
