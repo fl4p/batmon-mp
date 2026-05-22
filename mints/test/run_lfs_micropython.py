@@ -226,10 +226,10 @@ def test_compress_prunes_and_retries():
 
     store._prune_oldest_shard = counting_prune
 
-    # leave less than one littlefs block free, so creating/writing the .tamp.tmp
-    # is guaranteed to hit ENOSPC (the test data compresses very well, so a larger
-    # margin could let a tiny shard fit). Exercises the except path for real:
-    # close the partial shard, unlink the .tmp, prune, retry.
+    # Leave less than one littlefs block free so the shard's first block
+    # allocation fails -> guaranteed ENOSPC regardless of the (large, ~14 KB)
+    # shard size. Exercises the except path for real: close the partial shard,
+    # unlink the .tmp, prune, retry.
     _fill_until_low('filler.bin', 256)
 
     idx = store._next_shard_index()        # == SEEDED
