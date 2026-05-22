@@ -299,10 +299,24 @@ class Store:
                 return
             self.open()
             fh = self._fh
-        # print('write flush', self._write_buf_pos, self._write_buf[:self._write_buf_pos])
-        self._fsize += fh.write(self._write_buf[:self._write_buf_pos])  # TODO use memoryview
-        fh.flush()  # in case we loose power
+
+        n = self._write_buf_pos
+        pos = self._fsize  # intended append offset == current end of file
+        while True:
+            try:
+                # seek(pos) before each attempt makes a retry overwrite any
+                # partial bytes from a failed write (fixed-width frames)
+                fh.seek(pos)
+                written = fh.write(self._write_buf[:n])  # TODO use memoryview
+                fh.flush()  # in case we lose power
+                break
+            except OSError as e:
+                # flash full: free the oldest shard and retry the write; if
+                # nothing is left to prune (or a different error), re-raise.
+                if getattr(e, 'errno', None) != errno.ENOSPC or not self._prune_oldest_shard():
+                    raise
         # os.fsync()
+        self._fsize = pos + written
         self._write_buf_pos = 0
 
         if sharding:

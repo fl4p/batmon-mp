@@ -240,6 +240,54 @@ def test_prune_and_retry_on_shard_creation():
             os.unlink(fn)
 
 
+def test_prune_and_retry_on_flush():
+    import glob, mints
+    store = Store('ftest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+    prefix = store._fn[:-3]
+    # two existing shards to prune from
+    for i in (0, 1):
+        with open(prefix + '%02i.tamp' % i, 'wb') as f:
+            f.write(b'x' * 1024)
+
+    real_open = open
+    state = {'raised': False}
+
+    class FlakyFile:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, b):
+            if not state['raised']:
+                state['raised'] = True
+                raise OSError(errno.ENOSPC, 'no space')
+            return self._f.write(b)
+
+        def __getattr__(self, k):
+            return getattr(self._f, k)  # delegate seek/flush/tell/read/close
+
+    def flaky_open(fn, mode='r', *a, **k):
+        f = real_open(fn, mode, *a, **k)
+        return FlakyFile(f) if fn == store._fn else f
+
+    mints.open = flaky_open
+    try:
+        # the write-buffer fills well before 500 frames, forcing a flush whose
+        # first write raises ENOSPC -> prune oldest (00) -> seek back -> retry
+        for i in range(500):
+            store.add_sample(dict(time=i, v=i))
+        store.flush()
+    finally:
+        mints.open = real_open
+        if store._fh:
+            store._fh.close()
+
+    assert state['raised'] is True               # the ENOSPC actually fired
+    assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [1]  # 00 pruned
+    assert os.stat(store._fn)[6] > 0             # data really landed in the .bin
+    for fn in glob.glob('ftest-*'):
+        os.unlink(fn)
+
+
 def assert_array_equal(a, b):
     import numpy
     numpy.testing.assert_array_equal(a, b)
@@ -256,6 +304,9 @@ def _main():
     # test_compress_file()
     test_store()
     test_shard_store()
+    test_shard_prune_helpers()
+    test_prune_and_retry_on_shard_creation()
+    test_prune_and_retry_on_flush()
 
 if __name__ == '__main__':
     _main()
