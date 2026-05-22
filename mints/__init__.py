@@ -32,10 +32,15 @@ COMPRESSION INVESTIGATION (done, 2026-05, on JKPferdestall sample, 6449 rows):
   fights the downsampler's purpose -- a product decision, not a compression one.
 
 """
-import errno
 import os
 import struct
 # from typing import BinaryIO
+
+# A full littlefs raises OSError(28). MicroPython's errno module omits the
+# ENOSPC *name* (it's not in the default MICROPY_PY_ERRNO_LIST), so referencing
+# errno.ENOSPC would itself raise AttributeError inside our except handler
+# on-device. The value 28 is stable across Linux/macOS/newlib/ESP-IDF.
+ENOSPC = 28
 
 DTypes = dict(
     # https://docs.python.org/3/library/struct.html#format-characters
@@ -196,7 +201,7 @@ class Store:
                 # flash full: free the oldest shard and retry; idx is unchanged
                 # because pruning only removes a lower index. If nothing is left
                 # to prune (or it's a different error), re-raise.
-                if getattr(e, 'errno', None) != errno.ENOSPC or not self._prune_oldest_shard():
+                if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
                     raise
 
         os.unlink(self._fn)
@@ -312,7 +317,7 @@ class Store:
             except OSError as e:
                 # flash full: free the oldest shard and retry the write; if
                 # nothing is left to prune (or a different error), re-raise.
-                if getattr(e, 'errno', None) != errno.ENOSPC or not self._prune_oldest_shard():
+                if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
                     raise
         # os.fsync()
         self._fsize = pos + written

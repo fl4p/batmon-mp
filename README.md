@@ -156,6 +156,10 @@ bytearray.clear not impl
 bytearray.copy
 bytearray.decode(errors="replace")
 
+errno.ENOSPC (and most errno names) NOT in the default MICROPY_PY_ERRNO_LIST,
+so `errno.ENOSPC` raises AttributeError even though a full littlefs raises
+OSError(28). Compare against the numeric value (28) instead. See mints ENOSPC.
+
 
 async def loop():
      for i in range(1,10):
