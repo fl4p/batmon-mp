@@ -157,11 +157,11 @@ class Store:
         fsize = os.stat(self._fn)[6]
         assert fsize >= 1024 * 16, "data file too small to compress " + str(fsize)
 
-        # TODO start from the top as old shards might have been deleted
-        # instead of str(i) use the index, monotic, need to remember it
-        i = 0
-        while file_exists(tamp_fn := self._fn[:-3] + '%02i.tamp' % i):
-            i += 1
+        # monotonic: always one past the highest existing index, so a pruned
+        # (lower) index is never reused even after old shards are deleted
+        idx = self._next_shard_index()
+        tamp_fn = self._fn[:-3] + '%02i.tamp' % idx
+        tmp_fn = tamp_fn + '.tmp'
 
         print('store creating new shard', tamp_fn, 'fsize', fsize)
 
@@ -171,18 +171,34 @@ class Store:
 
         read_frame = struct.Struct(self._frame_fmt).unpack
         from mints.shard import ShardStore
-        shard = ShardStore(self.columns, tamp_fn + '.tmp')
-        with open(self._fn, 'rb') as fh:
-            while len(frame := fh.read(self._frame_size)) == self._frame_size:
-                vals = read_frame(frame)
-                shard.add_sample(vals)
-        shard.close()
 
-        # This was the old way:
-        # from mints.coding import compress_file
-        # compress_file(self._fn, tamp_fn + '.tmp', window=8)
-
-        os.rename(tamp_fn + '.tmp', tamp_fn)
+        while True:
+            shard = None
+            try:
+                shard = ShardStore(self.columns, tmp_fn)
+                with open(self._fn, 'rb') as fh:
+                    while len(frame := fh.read(self._frame_size)) == self._frame_size:
+                        shard.add_sample(read_frame(frame))
+                shard.close()
+                shard = None
+                os.rename(tmp_fn, tamp_fn)
+                break
+            except OSError as e:
+                # close + drop the partial in-progress shard before retrying
+                if shard is not None:
+                    try:
+                        shard.close()
+                    except OSError:
+                        pass
+                try:
+                    os.unlink(tmp_fn)
+                except OSError:
+                    pass
+                # flash full: free the oldest shard and retry; idx is unchanged
+                # because pruning only removes a lower index. If nothing is left
+                # to prune (or it's a different error), re-raise.
+                if getattr(e, 'errno', None) != errno.ENOSPC or not self._prune_oldest_shard():
+                    raise
 
         os.unlink(self._fn)
         self._fsize = 0

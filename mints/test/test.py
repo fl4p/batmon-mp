@@ -198,6 +198,48 @@ def test_shard_prune_helpers():
             os.unlink(fn)
 
 
+def test_prune_and_retry_on_shard_creation():
+    import glob
+    store = Store('rtest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+
+    def fill_and_shard(n=5000):
+        # n*4 bytes (HH frame) > the 16 KiB compress assert threshold
+        for i in range(n):
+            store.add_sample(dict(time=i % 65535, v=i % 65535))
+        store.flush()
+        store.compress_data_file()
+
+    try:
+        fill_and_shard()   # creates shard index 00
+        fill_and_shard()   # creates shard index 01
+        assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [0, 1]
+
+        # inject a single ENOSPC on the shard rename, then let the retry succeed
+        real_rename = os.rename
+        calls = {'n': 0}
+
+        def flaky_rename(a, b):
+            if calls['n'] == 0:
+                calls['n'] += 1
+                raise OSError(errno.ENOSPC, 'no space')
+            return real_rename(a, b)
+
+        os.rename = flaky_rename
+        try:
+            fill_and_shard()  # wants index 02; rename fails once -> prune 00 -> retry
+        finally:
+            os.rename = real_rename
+
+        assert calls['n'] == 1  # the failure actually happened
+        # oldest (00) pruned, new (02) created, numbering never reused 00
+        assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [1, 2]
+    finally:
+        if store._fh:
+            store._fh.close()
+        for fn in glob.glob('rtest-*'):
+            os.unlink(fn)
+
+
 def assert_array_equal(a, b):
     import numpy
     numpy.testing.assert_array_equal(a, b)
