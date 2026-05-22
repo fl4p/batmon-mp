@@ -173,7 +173,10 @@ class Store:
             self._fh.close()
             self._fh = None
 
-        read_frame = struct.Struct(self._frame_fmt).unpack
+        # struct.Struct is absent from generic MicroPython builds; use the
+        # module-level struct.unpack (as ShardStoreReader already does).
+        fmt = self._frame_fmt
+        read_frame = lambda b: struct.unpack(fmt, b)
         from mints.shard import ShardStore
 
         while True:
