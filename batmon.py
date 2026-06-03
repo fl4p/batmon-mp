@@ -48,6 +48,11 @@ store: Store | None = None
 WD_STALE_MS = 30000
 _last_update_ms = None
 
+# periodically re-init the LCD: the HD44780 over a PCF8574 backpack can silently
+# lose its config from I2C glitches on long unattended runs and show garbage
+# while the chip keeps running. begin() blocks ~1s, so don't do it every loop.
+LCD_REINIT_S = 120
+
 # logging.basicConfig(level=logging.DEBUG)
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -194,6 +199,7 @@ async def main() -> None:
                 lcd.backlight()
 
             t0 = time.time()
+            t_last_lcd_reset = t0
 
             def set_backlight(on):
                 nonlocal lcd_bl_state
@@ -300,7 +306,11 @@ async def main() -> None:
                 #                         dict(device=dev_name, cell_index=ci),
                 #                         dict(voltage=int(round(cells[ci] * 1000))))
 
-                # TODO periodically reset_lcd()
+                # periodically re-init the LCD to recover from a glitched
+                # controller (begin() preserves backlight state via _backlightval)
+                if lcd and now - t_last_lcd_reset > LCD_REINIT_S:
+                    reset_lcd()
+                    t_last_lcd_reset = now
 
                 if lcd:
                     lcd.clear()
