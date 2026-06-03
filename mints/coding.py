@@ -23,7 +23,7 @@ def ZigZagDecode(value: int):
 
 
 def _VarintEncoder(signed=True):
-    pack_int2byte = lambda v: struct.pack('>B', v)  # struct.Struct absent on generic MicroPython
+    pack_int2byte = struct.Struct('>B').pack if hasattr(struct, 'Struct') else lambda v: struct.pack('>B', v)  # struct.Struct absent on generic MicroPython
 
     def EncodeSignedVarint(write, value):
         if value < 0:

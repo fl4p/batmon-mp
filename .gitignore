@@ -31,3 +31,5 @@ lib/*.py
 mints_test
 
 gauge.json
+
+dl3/
