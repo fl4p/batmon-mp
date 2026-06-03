@@ -57,6 +57,16 @@ filename-format change.
 
 ### 2. Reactive prune-and-retry
 
+**Detecting ENOSPC (validated on real littlefs, MicroPython 1.27 unix port):**
+A full `VfsLfs2` raises `OSError` with `errno == 28`, and `os.unlink` reclaims the
+freed blocks immediately so the retry write succeeds. Crucially, MicroPython's
+`errno` module does **not** define the name `ENOSPC` (it's absent from the default
+`MICROPY_PY_ERRNO_LIST`), so referencing `errno.ENOSPC` raises `AttributeError`
+*inside* the except handler on-device. Therefore the code defines a module-level
+constant `ENOSPC = 28` (the value is stable across Linux/macOS/newlib/ESP-IDF) and
+compares against it rather than importing `errno`. A real-littlefs regression test
+lives at `mints/test/run_lfs_micropython.py` (run with the MicroPython unix port).
+
 A single retry pattern wraps each risky write:
 
 ```
@@ -65,13 +75,13 @@ while True:
         <do the write>
         break
     except OSError as e:
-        if getattr(e, 'errno', None) != errno.ENOSPC or not self._prune_oldest_shard():
+        if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
             raise
         # space freed; loop and retry
 ```
 
-Filtering on `errno.ENOSPC` ensures unrelated I/O errors do not trigger data
-deletion — they re-raise immediately.
+Filtering on `ENOSPC` (the module constant `= 28`) ensures unrelated I/O errors
+do not trigger data deletion — they re-raise immediately.
 
 **`compress_data_file`** — wrap the shard build (`ShardStore` write loop) plus
 the `os.rename` in the retry loop. On `OSError`, first `os.unlink` the partial

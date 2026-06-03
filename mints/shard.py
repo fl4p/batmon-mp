@@ -54,7 +54,10 @@ class ShardStore:
         import tamp
         self._fh = tamp.open(output_file, "wb", window=tamp_window)
 
-        self._pack_funcs = [struct.Struct(DTypes[col.dtype]).pack for col in columns]
+        # struct.Struct is absent from generic MicroPython builds; build per-column
+        # pack closures over the module-level struct.pack instead.
+        self._pack_funcs = [(lambda fmt: lambda v: struct.pack(fmt, v))(DTypes[col.dtype])
+                            for col in columns]
 
     def add_sample(self, row: tuple):
         # write = lambda b: self._fh.write(b)

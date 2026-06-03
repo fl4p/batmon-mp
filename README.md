@@ -156,6 +156,16 @@ bytearray.clear not impl
 bytearray.copy
 bytearray.decode(errors="replace")
 
+errno.ENOSPC (and most errno names) NOT in the default MICROPY_PY_ERRNO_LIST,
+so `errno.ENOSPC` raises AttributeError even though a full littlefs raises
+OSError(28). Compare against the numeric value (28) instead. See mints ENOSPC.
+
+struct.Struct class NOT in the generic firmware's struct module (only
+pack/unpack/calcsize/pack_into/unpack_from). It can't be added either: the
+builtin module is read-only (setattr fails) and a same-named .py can't shadow a
+builtin. Use the module-level struct.pack/unpack(fmt, ...) instead of
+struct.Struct(fmt).
+
 
 async def loop():
      for i in range(1,10):

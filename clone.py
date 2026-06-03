@@ -1,3 +1,14 @@
+"""
+
+Clones a peripheral with all its services/chars.
+1. connect to a peripheral
+2. iterate services/chars
+3. close the peripheral
+4. register cloned services/chars
+
+This order seems to be important.
+
+"""
 import asyncio
 import collections
 import sys

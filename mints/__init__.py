@@ -1,7 +1,6 @@
 """
 
 TODO:
-- delete old shards if disk is full (notice by OSError)
 - fix sharding (see below)
 - use delta-coding or delta-delta-coding + zig-zag
 - use variable length integer coding (varints)
@@ -36,6 +35,12 @@ COMPRESSION INVESTIGATION (done, 2026-05, on JKPferdestall sample, 6449 rows):
 import os
 import struct
 # from typing import BinaryIO
+
+# A full littlefs raises OSError(28). MicroPython's errno module omits the
+# ENOSPC *name* (it's not in the default MICROPY_PY_ERRNO_LIST), so referencing
+# errno.ENOSPC would itself raise AttributeError inside our except handler
+# on-device. The value 28 is stable across Linux/macOS/newlib/ESP-IDF.
+ENOSPC = 28
 
 DTypes = dict(
     # https://docs.python.org/3/library/struct.html#format-characters
@@ -130,16 +135,37 @@ class Store:
         bn = self._fn[:-3]
         return [f for f in files if f.startswith(bn) and f.endswith('.tamp')]
 
+    def _shard_index(self, fn):
+        # fn is '{prefix}NN.tamp' where prefix == self._fn[:-3]; NN parsed numerically
+        bn = self._fn[:-3]
+        return int(fn[len(bn):-len('.tamp')])
+
+    def _next_shard_index(self):
+        shards = self.get_shard_files()
+        if not shards:
+            return 0
+        return max(self._shard_index(f) for f in shards) + 1
+
+    def _prune_oldest_shard(self):
+        # delete the lowest-index .tamp shard; return False if there are none
+        shards = self.get_shard_files()
+        if not shards:
+            return False
+        oldest = min(shards, key=self._shard_index)
+        print('store pruning oldest shard', oldest)
+        os.unlink(oldest)
+        return True
+
     def compress_data_file(self):
         # create a new compressed shard of the current data file
         fsize = os.stat(self._fn)[6]
         assert fsize >= 1024 * 16, "data file too small to compress " + str(fsize)
 
-        # TODO start from the top as old shards might have been deleted
-        # instead of str(i) use the index, monotic, need to remember it
-        i = 0
-        while file_exists(tamp_fn := self._fn[:-3] + '%02i.tamp' % i):
-            i += 1
+        # monotonic: always one past the highest existing index, so a pruned
+        # (lower) index is never reused even after old shards are deleted
+        idx = self._next_shard_index()
+        tamp_fn = self._fn[:-3] + '%02i.tamp' % idx
+        tmp_fn = tamp_fn + '.tmp'
 
         print('store creating new shard', tamp_fn, 'fsize', fsize)
 
@@ -147,20 +173,39 @@ class Store:
             self._fh.close()
             self._fh = None
 
-        read_frame = struct.Struct(self._frame_fmt).unpack
+        # struct.Struct is absent from generic MicroPython builds; use the
+        # module-level struct.unpack (as ShardStoreReader already does).
+        fmt = self._frame_fmt
+        read_frame = lambda b: struct.unpack(fmt, b)
         from mints.shard import ShardStore
-        shard = ShardStore(self.columns, tamp_fn + '.tmp')
-        with open(self._fn, 'rb') as fh:
-            while len(frame := fh.read(self._frame_size)) == self._frame_size:
-                vals = read_frame(frame)
-                shard.add_sample(vals)
-        shard.close()
 
-        # This was the old way:
-        # from mints.coding import compress_file
-        # compress_file(self._fn, tamp_fn + '.tmp', window=8)
-
-        os.rename(tamp_fn + '.tmp', tamp_fn)
+        while True:
+            shard = None
+            try:
+                shard = ShardStore(self.columns, tmp_fn)
+                with open(self._fn, 'rb') as fh:
+                    while len(frame := fh.read(self._frame_size)) == self._frame_size:
+                        shard.add_sample(read_frame(frame))
+                shard.close()
+                shard = None
+                os.rename(tmp_fn, tamp_fn)
+                break
+            except OSError as e:
+                # close + drop the partial in-progress shard before retrying
+                if shard is not None:
+                    try:
+                        shard.close()
+                    except OSError:
+                        pass
+                try:
+                    os.unlink(tmp_fn)
+                except OSError:
+                    pass
+                # flash full: free the oldest shard and retry; idx is unchanged
+                # because pruning only removes a lower index. If nothing is left
+                # to prune (or it's a different error), re-raise.
+                if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
+                    raise
 
         os.unlink(self._fn)
         self._fsize = 0
@@ -261,10 +306,24 @@ class Store:
                 return
             self.open()
             fh = self._fh
-        # print('write flush', self._write_buf_pos, self._write_buf[:self._write_buf_pos])
-        self._fsize += fh.write(self._write_buf[:self._write_buf_pos])  # TODO use memoryview
-        fh.flush()  # in case we loose power
+
+        n = self._write_buf_pos
+        pos = self._fsize  # intended append offset == current end of file
+        while True:
+            try:
+                # seek(pos) before each attempt makes a retry overwrite any
+                # partial bytes from a failed write (fixed-width frames)
+                fh.seek(pos)
+                written = fh.write(self._write_buf[:n])  # TODO use memoryview
+                fh.flush()  # in case we lose power
+                break
+            except OSError as e:
+                # flash full: free the oldest shard and retry the write; if
+                # nothing is left to prune (or a different error), re-raise.
+                if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
+                    raise
         # os.fsync()
+        self._fsize = pos + written
         self._write_buf_pos = 0
 
         if sharding:

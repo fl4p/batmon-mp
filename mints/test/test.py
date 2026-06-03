@@ -1,9 +1,10 @@
+import errno
 import math
 import os
 import random
 import struct
 
-from .. import Store, Col
+from .. import Store, Col, file_exists
 from ..coding import ZigZagEncode, ZigZagDecode, SignedVarintEncode, SignedVarintDecode
 from ..shard import ShardStoreReader, ShardStore
 
@@ -172,6 +173,121 @@ def test_compress_file():
     os.unlink('_test_compress_file.bin2')
 
 
+def test_shard_prune_helpers():
+    import glob
+    store = Store('ptest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+    prefix = store._fn[:-3]  # 'ptest-time,v-HH.'
+    # shards with a gap (no 09..99) and across the 99->100 filename-width boundary
+    for i in (8, 100):
+        with open(prefix + '%02i.tamp' % i, 'wb') as f:
+            f.write(b'\x00')
+    try:
+        assert store._shard_index(prefix + '08.tamp') == 8
+        assert store._shard_index(prefix + '100.tamp') == 100
+        # next index ignores gaps and uses the numeric max, not lexical
+        assert store._next_shard_index() == 101
+        # prune removes the numeric minimum (08), not lexical ('100' < '08')
+        assert store._prune_oldest_shard() is True
+        assert not file_exists(prefix + '08.tamp')
+        assert file_exists(prefix + '100.tamp')
+        assert store._prune_oldest_shard() is True   # removes 100
+        assert store._prune_oldest_shard() is False  # nothing left
+        assert store._next_shard_index() == 0
+    finally:
+        for fn in glob.glob('ptest-*'):
+            os.unlink(fn)
+
+
+def test_prune_and_retry_on_shard_creation():
+    import glob
+    store = Store('rtest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+
+    def fill_and_shard(n=5000):
+        # n*4 bytes (HH frame) > the 16 KiB compress assert threshold
+        for i in range(n):
+            store.add_sample(dict(time=i % 65535, v=i % 65535))
+        store.flush()
+        store.compress_data_file()
+
+    try:
+        fill_and_shard()   # creates shard index 00
+        fill_and_shard()   # creates shard index 01
+        assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [0, 1]
+
+        # inject a single ENOSPC on the shard rename, then let the retry succeed
+        real_rename = os.rename
+        calls = {'n': 0}
+
+        def flaky_rename(a, b):
+            if calls['n'] == 0:
+                calls['n'] += 1
+                raise OSError(errno.ENOSPC, 'no space')
+            return real_rename(a, b)
+
+        os.rename = flaky_rename
+        try:
+            fill_and_shard()  # wants index 02; rename fails once -> prune 00 -> retry
+        finally:
+            os.rename = real_rename
+
+        assert calls['n'] == 1  # the failure actually happened
+        # oldest (00) pruned, new (02) created, numbering never reused 00
+        assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [1, 2]
+    finally:
+        if store._fh:
+            store._fh.close()
+        for fn in glob.glob('rtest-*'):
+            os.unlink(fn)
+
+
+def test_prune_and_retry_on_flush():
+    import glob, mints
+    store = Store('ftest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+    prefix = store._fn[:-3]
+    # two existing shards to prune from
+    for i in (0, 1):
+        with open(prefix + '%02i.tamp' % i, 'wb') as f:
+            f.write(b'x' * 1024)
+
+    real_open = open
+    state = {'raised': False}
+
+    class FlakyFile:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, b):
+            if not state['raised']:
+                state['raised'] = True
+                raise OSError(errno.ENOSPC, 'no space')
+            return self._f.write(b)
+
+        def __getattr__(self, k):
+            return getattr(self._f, k)  # delegate seek/flush/tell/read/close
+
+    def flaky_open(fn, mode='r', *a, **k):
+        f = real_open(fn, mode, *a, **k)
+        return FlakyFile(f) if fn == store._fn else f
+
+    mints.open = flaky_open
+    try:
+        # the write-buffer fills well before 500 frames, forcing a flush whose
+        # first write raises ENOSPC -> prune oldest (00) -> seek back -> retry
+        for i in range(500):
+            store.add_sample(dict(time=i, v=i))
+        store.flush()
+    finally:
+        mints.open = real_open
+        if store._fh:
+            store._fh.close()
+
+    assert state['raised'] is True               # the ENOSPC actually fired
+    assert sorted(store._shard_index(f) for f in store.get_shard_files()) == [1]  # 00 pruned
+    assert os.stat(store._fn)[6] > 0             # data really landed in the .bin
+    for fn in glob.glob('ftest-*'):
+        os.unlink(fn)
+
+
 def assert_array_equal(a, b):
     import numpy
     numpy.testing.assert_array_equal(a, b)
@@ -188,6 +304,9 @@ def _main():
     # test_compress_file()
     test_store()
     test_shard_store()
+    test_shard_prune_helpers()
+    test_prune_and_retry_on_shard_creation()
+    test_prune_and_retry_on_flush()
 
 if __name__ == '__main__':
     _main()
