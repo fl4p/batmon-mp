@@ -44,6 +44,10 @@ i2c = I2C(0, scl=Pin(2), sda=Pin(1), freq=800000)
 lcd: LCD = None
 store: Store | None = None
 
+# reset if no fresh BMS data for this long (stuck-BLE watchdog)
+WD_STALE_MS = 30000
+_last_update_ms = None
+
 # logging.basicConfig(level=logging.DEBUG)
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -122,9 +126,32 @@ def reset_lcd():
         lcd.begin()
 
 
+async def _data_watchdog():
+    import machine
+    try:
+        wdt = machine.WDT(timeout=30000)
+    except Exception as e:
+        print('WDT init failed:', e)
+        wdt = None
+    while True:
+        if wdt:
+            wdt.feed()
+        await asyncio.sleep(2)
+        if _last_update_ms is None:
+            continue
+        if time.ticks_diff(time.ticks_ms(), _last_update_ms) > WD_STALE_MS:
+            print('watchdog: no BMS data -> reset')
+            try:
+                store and store.flush()
+            except Exception:
+                pass
+            time.sleep_ms(200)
+            machine.reset()
+
+
 async def main() -> None:
     # import batmon; import asyncio; asyncio.run(batmon.main())
-    global bms, store, lcd
+    global bms, store, lcd, _last_update_ms
 
     try:
         lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
@@ -144,6 +171,8 @@ async def main() -> None:
         Col('cell_max', 'u16'),
         Col('minmax_idx', 'u8'),
     ])
+
+    asyncio.create_task(_data_watchdog())
 
     while True:
         try:
@@ -180,6 +209,7 @@ async def main() -> None:
             ds = Downsampler(design_cap=DESIGN_CAP)
 
             data = await bms.async_update()
+            _last_update_ms = time.ticks_ms()
             cell_num = int(data['cell_count'])
             assert cell_num == len(data['cell_voltages'])
             assert cell_num > 0 and cell_num <= 16  # we use a single byte to store index of min&max cell, and 16*16=256
@@ -191,6 +221,7 @@ async def main() -> None:
             while bms._client.is_connected:
                 logger.info("Updating BMS data...")
                 data = await bms.async_update()
+                _last_update_ms = time.ticks_ms()
                 now = time.time()
 
                 if prev_data != data:
