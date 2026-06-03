@@ -86,6 +86,9 @@
 
 <button onclick="connect()">Connect</button>
 <button onclick="updateFileView()">Refresh File List</button>
+<button onclick="document.getElementById('uploadInput').click()">Upload</button>
+<input type="file" id="uploadInput" style="display:none" onchange="uploadFile(this)"/>
+<label style="margin-left:1em"><input type="checkbox" id="chk-reject" checked onchange="toggleReject(this.checked)"/> Reject corrupt frames</label>
 
 <span id="progressView"></span>
 
@@ -99,6 +102,13 @@
 <script>
     function msg(m) {
         console.log(m);
+    }
+
+    window.rejectOutliers = true;
+
+    function toggleReject(on) {
+        window.rejectOutliers = on;
+        if (window.currentPlotFile) plotFile(...window.currentPlotFile);  // re-plot current file
     }
 
     window.onerror = function (msg, url, line, col, error) {
@@ -169,6 +179,31 @@
         return [await resp.bytes(), new Date(resp.headers.get('Last-Modified'))];
     }
 
+    /**
+     * Drop torn/garbled frames using physical invariants only (not current magnitude,
+     * so real pulsed-load discharge spikes survive). The reliable tell is SoC: it is
+     * coulomb-counted, hence physically smooth, and cannot jump away from its local
+     * median by more than socJump % in one sample. Two-pass: pass 1 removes hard-corrupt
+     * frames (all-zero soc, out-of-range temp) so they cannot poison the rolling median.
+     * Mirrors Store.reject_corrupt_frames in mints/__init__.py.
+     */
+    function rejectCorruptFrames(rows, socIdx, tempIdx, socJump = 4, tempLo = -40, tempHi = 85) {
+        const pass1 = rows.filter(r => {
+            const temp = r[tempIdx] / 2 - 40;
+            return r[socIdx] !== 0 && temp >= tempLo && temp <= tempHi;
+        });
+        const soc = pass1.map(r => r[socIdx] / 2);
+        const half = 3, out = [];
+        for (let i = 0; i < pass1.length; i++) {
+            const w = soc.slice(Math.max(0, i - half), Math.min(soc.length, i + half + 1))
+                .sort((a, b) => a - b);
+            const n = w.length;
+            const med = n % 2 ? w[(n - 1) / 2] : (w[n / 2 - 1] + w[n / 2]) / 2;
+            if (Math.abs(soc[i] - med) <= socJump) out.push(pass1[i]);
+        }
+        return out;
+    }
+
     function readRows(bytes, head, fmt) {
         try {
             s = window.struct(fmt);
@@ -179,10 +214,30 @@
         const len = (bytes.byteLength || bytes.length);
         const rowSize = s.size;
         const numRows = (len / rowSize) | 0;
-        //const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
-        const columnData = Array(head.length).fill().map(() => Array(numRows).fill());
-        console.log(head, numRows, 'rows', rowSize, 'bytes/row')
         console.assert(len % rowSize === 0);
+
+        // decode all frames, making overflowing (u16-wrapped) time monotonic
+        let rows = [];
+        let t = 0, tOff = 0;
+        for (let i = 0; i < numRows; i++) {
+            const row = s.unpack_from(bytes, i * rowSize);
+            if (row[0] + tOff < t)
+                tOff = t - row[0] + 1
+            row[0] += tOff;
+            t = row[0];
+            rows.push(row);
+        }
+
+        // gated corrupt-frame rejection (default on; toggled by the "Reject corrupt frames" checkbox)
+        const socIdx = head.indexOf('soc2'), tempIdx = head.indexOf('temp2');
+        if (window.rejectOutliers !== false && socIdx >= 0 && tempIdx >= 0) {
+            const before = rows.length;
+            rows = rejectCorruptFrames(rows, socIdx, tempIdx);
+            console.log('rejected', before - rows.length, 'corrupt frames of', before);
+        }
+
+        console.log(head, rows.length, 'rows', rowSize, 'bytes/row')
+        const columnData = Array(head.length).fill().map(() => Array(rows.length));
         const converters = {
             time: x => (x * 10) * 1000,
             voltage: x => x / 100,
@@ -191,21 +246,13 @@
             temp2: x => x / 2 - 40,
         }
 
-        let t = 0, tOff = 0, prevRow = null;
-        for (let i = 0; i < numRows; i++) {
-            const row = s.unpack_from(bytes, i * rowSize);
-            //  //const fn = 'JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin';
-            // make overflowing time values monontonic
-            if (row[0] + tOff < t)
-                tOff = t - row[0] + 1
-            row[0] += tOff;
-            t = row[0];
-
-            if (prevRow && row[4] === 0) {
-                //console.log('skip', head, row);
-                //continue;
-                row[3] = prevRow[3]; // temp
-                row[4] = prevRow[4]; // soc
+        let prevRow = null;
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            // when rejection is off, carry temp/soc forward over all-zero default frames
+            if (prevRow && socIdx >= 0 && row[socIdx] === 0) {
+                row[tempIdx] = prevRow[tempIdx]; // temp
+                row[socIdx] = prevRow[socIdx];   // soc
             }
 
             for (let j = 0; j < head.length; j++) {

@@ -17,7 +17,8 @@ file_path = (
     '../dl/JKPferdestall-time,voltage,current,temp2,soc2,cell_min,cell_max,minmax_idx-HHhBBHHB.bin'
 )
 dat = Store.read_file_to_pandas(
-    file_path
+    file_path,
+    reject_outliers=True,  # drop torn/garbled frames (impossible current/temp/SoC jumps)
 )
 
 dat.index = pd.to_datetime(round(os.stat(file_path).st_mtime) + dat.index.values*10 - dat.index[-1]*10, unit='s')

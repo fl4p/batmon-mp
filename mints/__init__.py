@@ -81,7 +81,39 @@ class Col:
 class Store:
 
     @staticmethod
-    def read_file_to_pandas(file_path):
+    def reject_corrupt_frames(df, soc_jump=4.0, temp_lo=-40.0, temp_hi=85.0):
+        """Drop torn/garbled batmon frames using physical invariants only.
+
+        Corruption shows up as a single frame where several channels are
+        simultaneously implausible (e.g. current=+289 A while SoC drops 80->12->80 %
+        and with no voltage/IR response). The reliable tell is SoC: battery_level is
+        coulomb-counted, so it is physically smooth and cannot jump by more than
+        `soc_jump` % from its local median in one sample. Current *magnitude* is never
+        used, so genuine pulsed-load discharge spikes (which show a correlated voltage
+        and cell-voltage sag) are preserved.
+
+        Two-pass, gated on the batmon schema: pass 1 removes hard-corrupt frames
+        (all-zero `soc2`, out-of-range `temp2`) so they cannot poison the rolling
+        reference; pass 2 flags the SoC discontinuities on what remains. No-op (returns
+        df unchanged) unless both `soc2` and `temp2` columns are present.
+        """
+        if not {'soc2', 'temp2'}.issubset(df.columns):
+            return df
+        import numpy as np
+        import pandas
+        soc2 = df['soc2'].to_numpy()
+        temp = df['temp2'].to_numpy() / 2.0 - 40.0
+        # df's index ('time') is non-unique, so work with a positional mask.
+        keep = (soc2 != 0) & (temp >= temp_lo) & (temp <= temp_hi)
+        kept_pos = np.flatnonzero(keep)
+        soc = pandas.Series((soc2[kept_pos]) / 2.0)
+        med = soc.rolling(7, center=True, min_periods=1).median()
+        smooth = (soc - med).abs().to_numpy() <= soc_jump
+        keep[kept_pos[~smooth]] = False
+        return df[keep]
+
+    @staticmethod
+    def read_file_to_pandas(file_path, reject_outliers=False):
         bn = file_path.replace('\\', '/').split('/')[-1].split('.')[-2].split('-')
         assert len(bn) >= 3
         name = '-'.join(bn[:-2])
@@ -104,7 +136,11 @@ class Store:
         import pandas
         cols = col_names.split(',')
         cols.append('idx')  # original index value
-        return pandas.DataFrame(rows, columns=cols).set_index(cols[0])
+        df = pandas.DataFrame(rows, columns=cols).set_index(cols[0])
+        # gate: opt-in so existing compression/export callers see raw frames
+        if reject_outliers:
+            df = Store.reject_corrupt_frames(df)
+        return df
 
     def __init__(self, name, columns: list[Col], buf_num_frames=None):
         FLASH_PAGE_SIZE = 256
