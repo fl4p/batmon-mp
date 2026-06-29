@@ -36,6 +36,14 @@ dev_name = "JKPferdestall"  # # BMS name
 
 DESIGN_CAP = 280  # # battery design capacity
 
+# Logger data-rate vs flash-retention knob (see Downsampler.BOOST_PROFILES). The
+# boost window oversamples the voltage relaxation tail after each load step for
+# the offline impedance/OCV fits; trimming it trades that fidelity for retention:
+#   'full'    -> impedance-grade,  shortest retention (~1 month on 1.4 MB)
+#   'trimmed' -> coarse tau fit,   ~mid retention
+#   'none'    -> no relaxation tail, longest retention (~1 year; pre-impedance)
+DOWNSAMPLE_BOOST = 'trimmed'
+
 # PCF8574 on 0x50
 I2C_ADDR = 0x27  # DEC 39, HEX 0x27
 NUM_ROWS = 2
@@ -212,7 +220,7 @@ async def main() -> None:
 
             si = 0.0
 
-            ds = Downsampler(design_cap=DESIGN_CAP)
+            ds = Downsampler(design_cap=DESIGN_CAP, boost=DOWNSAMPLE_BOOST)
 
             data = await bms.async_update()
             _last_update_ms = time.ticks_ms()

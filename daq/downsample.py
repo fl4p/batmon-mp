@@ -33,14 +33,46 @@ class Downsampler:
       4. Very-low / no current -> the slowest tier.
     """
 
-    # Post-transition oversampling schedule, in polls since the last
-    # significant event. Tuned for LiFePO4: fast polarisation tau ~30-100 s,
-    # so 32 fine + 96 medium + 172 coarse polls (~5 min @ 1 Hz) span 2-3 tau.
-    BOOST_FINE_END = 32       # polls 0..32  -> store_interval = 1   (~32 samples)
-    BOOST_MED_END = 128       # polls 33..128 -> store_interval = 4  (~24 samples)
-    BOOST_COARSE_END = 300    # polls 129..300 -> store_interval = 16 (~11 samples)
+    # Post-transition oversampling schedule, in polls since the last significant
+    # event: store_interval is 1 / 4 / 16 within the fine / med / coarse bands,
+    # then heartbeat. Tuned for LiFePO4 (fast polarisation tau ~30-100 s). The
+    # window captures the voltage relaxation tail after each load step for the
+    # offline impedance/OCV fits; samples-per-event roughly sets the data rate,
+    # so this is the knob that trades impedance fidelity for flash retention:
+    #   'full'    -> ~67 samples/event, full V(t) tail  (impedance-grade; shortest retention)
+    #   'trimmed' -> ~24 samples/event, fast tail only  (coarse tau fit; ~mid retention)
+    #   'none'    -> 1 sample/event, no tail            (pre-impedance behaviour; longest retention)
+    # 'trimmed' is sized to what the bat-impedance R0/R1/tau fits actually read:
+    # they cap the relaxation window at ~150-180 s and need >=12 tail points over
+    # >=2*tau (~60-120 s), so ~8 pts @2s (0-16s, R0) + ~6 @8s (16-64s, tau) + ~3
+    # @32s (64-150s, R_dc); everything past ~180 s in 'full' is unread overhead.
+    BOOST_PROFILES = {
+        #            (fine_end, med_end, coarse_end)  -- polls since the event
+        'full':      (32, 128, 300),   # ~67 samples / ~600 s
+        'trimmed':   ( 8,  32,  75),   # ~17 samples / ~150 s  (impedance-grade, ~4x retention)
+        'none':      ( 0,   0,   0),   # 1 sample/event (no relaxation tail -> no R estimate)
+    }
 
-    def __init__(self, design_cap):
+    # Step-gate: only a genuine current STEP this large opens the relaxation boost
+    # window (the bat-impedance R0/tau fits need dI >= ~6 A; bigger = better SNR).
+    # Smaller "events" -- SoC ticks and pack-voltage drift -- still store ONE
+    # sample but no longer spawn a boost; that spurious boosting on voltage noise
+    # was the main retention sink (it fired ~every 75 s, each costing a full tail).
+    BOOST_STEP_FRAC = 0.05      # * design_cap (~14 A): a current step >= this --
+                                # instantaneous OR drifted over ~16 polls -- opens
+                                # the boost, fired the same poll so R0 isn't missed.
+
+    # Rest heartbeat (|I| ~ 0): keeps the settled-OCV anchor alive for Qmax/SoH.
+    # ~6 min (@2 s poll) puts ~5 samples in a 30 min rest (plus the post-step
+    # boost); the old 1024-poll (~34 min) tier dropped ~1 sample/rest and starved
+    # the bat-impedance rest_events / OCV-asymptote fits.
+    REST_HEARTBEAT = 180        # polls
+
+    def __init__(self, design_cap, boost='full'):
+        if boost not in self.BOOST_PROFILES:
+            raise ValueError('boost must be one of %s' % list(self.BOOST_PROFILES.keys()))
+        self.boost = boost
+        self.BOOST_FINE_END, self.BOOST_MED_END, self.BOOST_COARSE_END = self.BOOST_PROFILES[boost]
         self.current_acc = 0
         self._n = 0
         self.current_mean = math.nan
@@ -62,18 +94,25 @@ class Downsampler:
         s._polls_since_change += 1
 
         soc_d = 2 if max(soc, s.prev_soc) >= 99 else 1
-        # Significant event -> store now, AND enter post-transition window
-        if (False
-                # or (abs(current_acc / current_acc_n - prev_current_mean) > DESIGN_CAP * 0.05) # this will let throug noise (daly)
-                # or (current_acc_n > 1 and rel_err(current_acc / current_acc_n, prev_current_mean) > 0.5)
-                or (abs(current - s.prev_mean) > s.DESIGN_CAP * 0.25)  # TODO capture peak, big jumps, in-rush
-                or (s._n > 16 and abs(
-                    s.current_acc / s._n - s.prev_mean) > s.DESIGN_CAP * 0.05)
-                or abs(soc - s.prev_soc) >= soc_d
-                or rel_err(voltage, s.prev_voltage) > 0.005):  # 0.002
-            print('load or soc change I=', current, s.prev_mean, s.current_acc / s._n, 'U=', s.prev_voltage, voltage)
+        cap = s.DESIGN_CAP
+        # A genuine load step (current jump or sustained level change) opens the
+        # relaxation boost window -- this is the only thing the impedance R0/tau
+        # fits can use.
+        boost_event = (abs(current - s.prev_mean) > cap * s.BOOST_STEP_FRAC
+                       or (s._n > 16
+                           and abs(s.current_acc / s._n - s.prev_mean) > cap * s.BOOST_STEP_FRAC))
+        # Other significant changes (SoC tick, pack-voltage drift) store one
+        # sample so the series stays faithful, but do NOT spawn a boost.
+        store_event = (boost_event
+                       or abs(soc - s.prev_soc) >= soc_d
+                       or rel_err(voltage, s.prev_voltage) > 0.005)
+
+        if boost_event:
+            print('load step -> boost I=', current, s.prev_mean, 'U=', s.prev_voltage, voltage)
             s._polls_since_change = 0
             store_interval = 1
+        elif store_event:
+            store_interval = 1  # store now, no relaxation boost
         elif s._polls_since_change < s.BOOST_FINE_END:
             # fine: instant jump + fast polarisation (first ~tau)
             store_interval = 1
@@ -83,15 +122,16 @@ class Downsampler:
         elif s._polls_since_change < s.BOOST_COARSE_END:
             # coarse: settling toward the asymptote
             store_interval = 16
-        elif abs(current) > s.DESIGN_CAP * 0.05:
+        elif abs(current) > cap * 0.05:
             # restored mid-current heartbeat -- without this, the 5-25%
             # design_cap regime falls through to the 256-tier and slow
             # charging events are coulomb-undercounted
             store_interval = 64
-        elif abs(current) > s.DESIGN_CAP * 0.005:
+        elif abs(current) > cap * 0.005:
             store_interval = 256
         else:
-            store_interval = 1024
+            # rest: kept fast enough to preserve the OCV/Qmax anchor (see above)
+            store_interval = s.REST_HEARTBEAT
 
         # store_interval //= 16
 
