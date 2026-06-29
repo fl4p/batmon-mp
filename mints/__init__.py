@@ -226,20 +226,25 @@ class Store:
                 shard = None
                 os.rename(tmp_fn, tamp_fn)
                 break
-            except OSError as e:
-                # close + drop the partial in-progress shard before retrying
+            except Exception as e:
+                # Drop the partial/zero-byte in-progress shard on ANY failure so a
+                # crashed attempt can't leak an orphan .tmp -- which both wastes
+                # flash and is invisible to pruning (get_shard_files matches only
+                # .tamp). This is what left a 0-byte ...00.tamp.tmp in the field.
                 if shard is not None:
                     try:
                         shard.close()
-                    except OSError:
+                    except Exception:
                         pass
                 try:
                     os.unlink(tmp_fn)
                 except OSError:
                     pass
                 # flash full: free the oldest shard and retry; idx is unchanged
-                # because pruning only removes a lower index. If nothing is left
-                # to prune (or it's a different error), re-raise.
+                # because pruning only removes a lower index. For anything else
+                # (e.g. MemoryError), or a full disk with nothing left to prune,
+                # re-raise -- flush() treats compaction as best-effort and keeps
+                # the hot file for the next attempt.
                 if getattr(e, 'errno', None) != ENOSPC or not self._prune_oldest_shard():
                     raise
 
@@ -364,7 +369,16 @@ class Store:
 
         if sharding:
             if self._fsize > (1024 * 256):
-                self.compress_data_file()
+                # Compaction is a best-effort background optimisation, not part of
+                # the write path. If it fails (MemoryError under BLE heap pressure,
+                # or a full disk with nothing to prune) we log and keep the hot
+                # file -- the next flush retries. It must NOT propagate: a transient
+                # compaction error escaping add_sample is what tore down the BMS
+                # link in the field (it bubbled past batmon's `except OSError`).
+                try:
+                    self.compress_data_file()
+                except Exception as e:
+                    print('store compaction failed, will retry:', e)
 
     def close(self):
         self.flush()

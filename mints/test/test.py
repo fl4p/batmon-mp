@@ -288,6 +288,62 @@ def test_prune_and_retry_on_flush():
         os.unlink(fn)
 
 
+def test_compaction_failure_is_best_effort():
+    # Field regression: a non-OSError during compaction (on-device this was an
+    # AttributeError -- shard.py used struct.Struct, absent on MicroPython; we
+    # inject a representative non-OSError below) must NOT leak the in-progress
+    # .tmp shard and must NOT propagate out of flush() -- a compaction error
+    # escaping add_sample is what tore down the BMS link and let the hot file
+    # grow unbounded until the flash filled.
+    import glob, mints.shard
+    store = Store('ctest', [Col('time', 'u16', monotonic=True), Col('v', 'u16')])
+
+    real_shard = mints.shard.ShardStore
+
+    class BoomShard:
+        # mimic tamp.open: create the (0-byte) output file, then fail the alloc
+        def __init__(self, columns, output_file, **k):
+            open(output_file, 'wb').close()
+            raise MemoryError('simulated heap exhaustion')
+
+    try:
+        for i in range(5000):                      # 5000*4 B > the 16 KiB threshold
+            store.add_sample(dict(time=i % 65535, v=i % 65535))
+        store.flush()
+        assert os.stat(store._fn)[6] >= 1024 * 16
+
+        mints.shard.ShardStore = BoomShard
+
+        # 1) direct call re-raises, but cleans up: no orphan .tmp, hot file kept
+        try:
+            store.compress_data_file()
+            assert False, 'expected MemoryError to propagate from compress_data_file'
+        except MemoryError:
+            pass
+        assert glob.glob(store._fn[:-3] + '*.tmp') == []   # no leaked orphan
+        assert os.stat(store._fn)[6] >= 1024 * 16          # hot file preserved
+        assert store.get_shard_files() == []               # no shard created
+
+        # 2) via flush(sharding=True): best-effort -> swallowed, never raises
+        store.open()
+        store._fsize = 1024 * 256 + 1                       # force the compaction branch
+        store._write_buf_pos = 0
+        store.flush(sharding=True)                          # must not raise
+        assert glob.glob(store._fn[:-3] + '*.tmp') == []   # still no orphan
+
+        # 3) once the pressure clears, compaction succeeds and resets the hot file
+        mints.shard.ShardStore = real_shard
+        store.compress_data_file()
+        assert len(store.get_shard_files()) == 1
+        assert store._fsize == 0
+    finally:
+        mints.shard.ShardStore = real_shard
+        if store._fh:
+            store._fh.close()
+        for fn in glob.glob('ctest-*'):
+            os.unlink(fn)
+
+
 def assert_array_equal(a, b):
     import numpy
     numpy.testing.assert_array_equal(a, b)
