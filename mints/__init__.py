@@ -11,25 +11,13 @@ TODO:
 - see https://tdengine.com/compressing-time-series-data/
 - https://github.com/michaeljclark/vf128
 
-COMPRESSION INVESTIGATION (done, 2026-05, on JKPferdestall sample, 6449 rows):
-  Current shard scheme (row delta+zigzag+varint -> tamp/LZ) measures ~0.367.
-  Only lever found is COLUMNAR layout (transpose so each column is contiguous before
-  delta+varint+LZ): ~0.302, i.e. ~18% smaller, and the advantage GROWS at small LZ
-  windows like tamp's (similar bytes become adjacent, stride 1 instead of 13).
-  Everything else was tested and does NOT help once the LZ pass runs:
-    double-delta 0.330 (worse, amplifies noise), cross-column decorrelation 0.302 (no
-    change), byte-shuffle 0.304 (ties), FOR bit-packing 0.335 (worse, breaks byte
-    alignment), column reorder ~negligible, splitting minmax_idx into 2 cols WORSE
-    (min/max cell flips ~60%/sample). RLE and change-bitmap also no better with LZ.
-  Reason: the data is near its lossless floor. Dominant columns are real entropy:
-    current = 27% of bits (6.4A stdev between samples), minmax_idx = 18.5% (irreducible).
-    The rest (voltage/cells/temp/soc/time) is already <=0.5 B/row.
-  Conclusion: no hidden 2x in the codec. Columnar (~18%) is the ceiling and likely not
-  worth the multi-pass read + row-count header + matching de-transpose in
-  etc/web/www/struct.mjs on embedded. The DOWNSAMPLER (daq/downsample.py) is the only
-  knob with order-of-magnitude headroom; tune it first if flash ever fills. Further
-  reduction would have to be LOSSY (coarser current quantization / deadband), which
-  fights the downsampler's purpose -- a product decision, not a compression one.
+COMPRESSION: see mints/COMPRESSION.md for the full design, measurements, and
+  conclusions (columnar/MTS1 shards ~-22.6%, the lossless entropy floor, the
+  tamp-vs-deflate-vs-pcodec analysis, and the impedance-safe current de-noising).
+  Short version: shipping codec is columnar + delta + zigzag + varint + tamp; the
+  remaining lossless codec wins are incremental; codec micro-tweaks are exhausted;
+  the DOWNSAMPLER (daq/downsample.py) is the only knob with order-of-magnitude
+  headroom.
 
 """
 import os
@@ -218,12 +206,15 @@ class Store:
         while True:
             shard = None
             try:
-                shard = ShardStore(self.columns, tmp_fn)
-                with open(self._fn, 'rb') as fh:
-                    while len(frame := fh.read(self._frame_size)) == self._frame_size:
-                        shard.add_sample(read_frame(frame))
-                shard.close()
-                shard = None
+                if hasattr(ShardStore, 'write_file'):
+                    ShardStore.write_file(self.columns, self._fn, fmt, self._frame_size, tmp_fn)
+                else:
+                    shard = ShardStore(self.columns, tmp_fn)
+                    with open(self._fn, 'rb') as fh:
+                        while len(frame := fh.read(self._frame_size)) == self._frame_size:
+                            shard.add_sample(read_frame(frame))
+                    shard.close()
+                    shard = None
                 os.rename(tmp_fn, tamp_fn)
                 break
             except Exception as e:

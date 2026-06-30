@@ -6,7 +6,7 @@ import struct
 
 from .. import Store, Col, file_exists
 from ..coding import ZigZagEncode, ZigZagDecode, SignedVarintEncode, SignedVarintDecode
-from ..shard import ShardStoreReader, ShardStore
+from ..shard import COLUMNAR_MAGIC, ShardStoreReader, ShardStore
 
 
 def test_store():
@@ -153,6 +153,46 @@ def test_shard_store():
 
         assert read_samples == samples
         os.unlink('test.shard')
+
+
+def test_columnar_shard_store():
+    columns = [
+        Col('time', 'u16', monotonic=True),
+        Col('voltage', 'f16'),
+        Col('current', 'i16'),
+        Col('soc2', 'u8'),
+    ]
+    fmt = 'HehB'
+    bin_fn = 'test-columnar.bin'
+    shard_fn = 'test-columnar.shard'
+    samples = []
+
+    try:
+        with open(bin_fn, 'wb') as f:
+            for i in range(2000):
+                packed = struct.pack(fmt, (i * 10) % 65535, 12 + math.sin(i / 5), int(math.sin(i / 7) * 100),
+                                     int(abs(math.sin(i / 50)) * 200))
+                f.write(packed)
+                row = struct.unpack(fmt, packed)
+                samples.append(dict((columns[j].name, row[j]) for j in range(len(columns))))
+
+        ShardStore.write_file(columns, bin_fn, fmt, struct.calcsize(fmt), shard_fn)
+
+        import tamp
+        with tamp.open(shard_fn, 'rb') as f:
+            assert f.read(len(COLUMNAR_MAGIC)) == COLUMNAR_MAGIC
+
+        reader = ShardStoreReader(columns, shard_fn)
+        read_samples = reader.read_all()
+        reader.close()
+
+        assert read_samples == samples
+    finally:
+        for fn in (bin_fn, shard_fn):
+            try:
+                os.unlink(fn)
+            except OSError:
+                pass
 
 
 def test_compress_file():
@@ -360,6 +400,7 @@ def _main():
     # test_compress_file()
     test_store()
     test_shard_store()
+    test_columnar_shard_store()
     test_shard_prune_helpers()
     test_prune_and_retry_on_shard_creation()
     test_prune_and_retry_on_flush()
