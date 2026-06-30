@@ -93,6 +93,15 @@ the intended handling, not a defect.
 - `daq/downsample.py` — `Downsampler`: adaptive sampling. Stores a point only when current jumps,
   SoC changes, or voltage moves significantly; otherwise stretches the interval (slower logging
   near zero current). `batmon.py`/`shunt.py` gate every `store.add_sample` through it.
+  After a real **current step** (≥`BOOST_STEP_FRAC`·design_cap, ~14 A) it opens a *boost window*
+  that oversamples the voltage relaxation tail for the offline impedance/SoH fits (the separate
+  `pv/bat-impedance` repo); SoC/voltage-only changes store a single sample but do **not** boost
+  (that spurious boosting was the main flash-retention sink). The boost size is the
+  retention⇄impedance knob: **`DOWNSAMPLE_BOOST`** in `batmon.py` picks a `BOOST_PROFILES` preset —
+  `'full'` (~67 samples/event, full V(t) tail), `'trimmed'` (~17 samples/~150 s, impedance-grade,
+  the current default) or `'none'` (1 sample/event, longest retention, no relaxation tail → no R
+  estimate). The rest-tier heartbeat (`REST_HEARTBEAT`, ~6 min) is kept fast enough to preserve the
+  OCV/Qmax rest anchors the SoH pipeline needs.
 
 ## Conventions & gotchas
 

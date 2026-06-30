@@ -101,6 +101,12 @@ and the program creates a new storage files (sharding).
 You can copy these shards any time from the device.
 With a 2 MB flash memory, it can capture up to 1 year of battery data. This strongly depends on battery usage.
 
+After each load step the logger briefly oversamples the voltage relaxation tail so the data can be
+used offline for cell-resistance and State-of-Health estimation. How much it oversamples is a
+retention-vs-detail knob, `DOWNSAMPLE_BOOST` in `batmon.py`: `'trimmed'` (default) keeps
+impedance-grade detail, `'full'` captures the richest relaxation curves at the cost of retention,
+and `'none'` maximises retention (~1 year+) but drops the relaxation tail.
+
 With an ESP32 you'll get a battery logger for just about $2.
 
 ## Efficient time series storage
